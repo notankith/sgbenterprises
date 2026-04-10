@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --border: rgba(15, 23, 42, 0.08);
+  --card: #ffffff;
+  --primary: #4f46e5;
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+body {
+  @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+  background: var(--bg);
+}
+
+.card {
+  @apply rounded-xl border border-slate-200/70 bg-white shadow-soft;
+}
+
+.kpi-card {
+  @apply card p-4;
+}
+
+.label-muted {
+  @apply text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+}
+
+.glass-nav {
+  @apply bg-white;
+}
+
+.skeleton {
+  @apply relative overflow-hidden rounded-md bg-slate-200/70;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}

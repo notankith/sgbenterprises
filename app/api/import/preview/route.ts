@@ -3,11 +3,13 @@ import * as XLSX from 'xlsx';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
-const headerAliases = {
-  invoiceNumber: ['invoice no', 'invoice number', 'invoice', 'invoice #', 'invoice id'],
-  shopName: ['party name', 'shop name', 'customer name', 'party', 'shop'],
-  amount: ['total amount', 'amount', 'invoice amount', 'total'],
-  date: ['date', 'invoice date', 'billing date'],
+const requiredColumnAliases = {
+  firm: ['cmpcode', 'cmp code'],
+  invoiceNumber: ['bill number'],
+  date: ['bill date'],
+  route: ['route'],
+  shopName: ['retailer name'],
+  amount: ['net amount'],
 } as const;
 
 function normalizeHeader(value: unknown) {
@@ -17,11 +19,13 @@ function normalizeHeader(value: unknown) {
 function detectHeaderRow(rows: any[][]) {
   for (let i = 0; i < Math.min(rows.length, 15); i++) {
     const headers = rows[i].map(normalizeHeader);
-    const hasInvoice = headers.some((h) => (headerAliases.invoiceNumber as readonly string[]).includes(h));
-    const hasShop = headers.some((h) => (headerAliases.shopName as readonly string[]).includes(h));
-    const hasAmount = headers.some((h) => (headerAliases.amount as readonly string[]).includes(h));
-    const hasDate = headers.some((h) => (headerAliases.date as readonly string[]).includes(h));
-    if (hasInvoice && hasShop && hasAmount && hasDate) {
+    const hasFirm = headers.some((h) => (requiredColumnAliases.firm as readonly string[]).includes(h));
+    const hasInvoice = headers.some((h) => (requiredColumnAliases.invoiceNumber as readonly string[]).includes(h));
+    const hasDate = headers.some((h) => (requiredColumnAliases.date as readonly string[]).includes(h));
+    const hasRoute = headers.some((h) => (requiredColumnAliases.route as readonly string[]).includes(h));
+    const hasShop = headers.some((h) => (requiredColumnAliases.shopName as readonly string[]).includes(h));
+    const hasAmount = headers.some((h) => (requiredColumnAliases.amount as readonly string[]).includes(h));
+    if (hasFirm && hasInvoice && hasDate && hasRoute && hasShop && hasAmount) {
       return i;
     }
   }
@@ -32,12 +36,23 @@ function findColumnIndex(headers: string[], aliases: readonly string[]) {
   return headers.findIndex((h) => aliases.includes(h));
 }
 
-function isTotalFooterRow(invoiceNumber: string, shopName: string, date: string) {
+function isTotalFooterRow(firm: string, invoiceNumber: string, shopName: string, route: string, date: string) {
+  const normalizedFirm = firm.toLowerCase().trim();
   const normalizedInvoice = invoiceNumber.toLowerCase().trim();
   const normalizedShop = shopName.toLowerCase().trim();
+  const normalizedRoute = route.toLowerCase().trim();
   const normalizedDate = date.toLowerCase().trim();
-  const hasTotalKeyword = /^total$/.test(normalizedInvoice) || /^total$/.test(normalizedShop);
-  return hasTotalKeyword || (!normalizedInvoice && !normalizedDate && /^total$/.test(normalizedShop));
+  const totalTokens = new Set(['total', 'totals']);
+
+  if (totalTokens.has(normalizedFirm) || totalTokens.has(normalizedInvoice) || totalTokens.has(normalizedShop) || totalTokens.has(normalizedRoute)) {
+    return true;
+  }
+
+  return !normalizedInvoice && !normalizedDate && (
+    normalizedFirm.includes('total') ||
+    normalizedShop.includes('total') ||
+    normalizedRoute.includes('total')
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -56,21 +71,23 @@ export async function POST(req: NextRequest) {
     const headerRowIndex = detectHeaderRow(matrix);
     if (headerRowIndex === -1) {
       return NextResponse.json(
-        { error: 'Could not detect required columns. Need invoice number, shop name, amount, and date columns.' },
+        { error: 'Could not detect required columns. Need CmpCode, Bill Number, Bill Date, Route, Retailer Name, and Net Amount.' },
         { status: 400 },
       );
     }
 
     const rawHeaders = matrix[headerRowIndex] || [];
     const headers = rawHeaders.map(normalizeHeader);
-    const invoiceIdx = findColumnIndex(headers, headerAliases.invoiceNumber);
-    const shopIdx = findColumnIndex(headers, headerAliases.shopName);
-    const amountIdx = findColumnIndex(headers, headerAliases.amount);
-    const dateIdx = findColumnIndex(headers, headerAliases.date);
+    const firmIdx = findColumnIndex(headers, requiredColumnAliases.firm);
+    const invoiceIdx = findColumnIndex(headers, requiredColumnAliases.invoiceNumber);
+    const dateIdx = findColumnIndex(headers, requiredColumnAliases.date);
+    const routeIdx = findColumnIndex(headers, requiredColumnAliases.route);
+    const shopIdx = findColumnIndex(headers, requiredColumnAliases.shopName);
+    const amountIdx = findColumnIndex(headers, requiredColumnAliases.amount);
 
-    if ([invoiceIdx, shopIdx, amountIdx, dateIdx].some((i) => i === -1)) {
+    if ([firmIdx, invoiceIdx, dateIdx, routeIdx, shopIdx, amountIdx].some((i) => i === -1)) {
       return NextResponse.json(
-        { error: 'Missing required columns: invoiceNumber, shopName, amount, date' },
+        { error: 'Missing required columns: firm, invoiceNumber, date, route, shopName, amount' },
         { status: 400 },
       );
     }
@@ -80,11 +97,13 @@ export async function POST(req: NextRequest) {
     let ignoredTotalRows = 0;
     const normalized = dataRows
       .map((r, idx) => {
+        const firm = String(r[firmIdx] || '').trim().toUpperCase();
         const invoiceNumber = String(r[invoiceIdx] || '').trim();
+        const route = String(r[routeIdx] || '').trim();
         const shopName = String(r[shopIdx] || '').trim();
         const date = String(r[dateIdx] || '').trim();
 
-        if (isTotalFooterRow(invoiceNumber, shopName, date)) {
+        if (isTotalFooterRow(firm, invoiceNumber, shopName, route, date)) {
           ignoredTotalRows += 1;
           return null;
         }
@@ -92,7 +111,9 @@ export async function POST(req: NextRequest) {
         const totalAmount = Number(String(r[amountIdx] || '').replace(/,/g, ''));
         const errors: Array<{ field: string; message: string }> = [];
 
+        if (!firm) errors.push({ field: 'firm', message: 'Missing firm (CmpCode)' });
         if (!invoiceNumber) errors.push({ field: 'invoiceNumber', message: 'Missing invoice number' });
+        if (!route) errors.push({ field: 'route', message: 'Missing route' });
         if (!shopName) errors.push({ field: 'shopName', message: 'Missing shop name' });
         if (!date) errors.push({ field: 'date', message: 'Missing date' });
         if (Number.isNaN(totalAmount) || totalAmount <= 0) {
@@ -101,7 +122,9 @@ export async function POST(req: NextRequest) {
 
         return {
           rowNumber: headerRowIndex + idx + 2,
+          firm,
           invoiceNumber,
+          route,
           shopName,
           date,
           totalAmount: Number.isNaN(totalAmount) ? 0 : totalAmount,
@@ -139,7 +162,9 @@ export async function POST(req: NextRequest) {
         ignoredTotalRows,
       },
       mappedColumns: {
+        firm: rawHeaders[firmIdx],
         invoiceNumber: rawHeaders[invoiceIdx],
+        route: rawHeaders[routeIdx],
         shopName: rawHeaders[shopIdx],
         amount: rawHeaders[amountIdx],
         date: rawHeaders[dateIdx],

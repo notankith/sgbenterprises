@@ -15,6 +15,8 @@ export async function GET(req: NextRequest) {
     const dateTo = String(req.nextUrl.searchParams.get('dateTo') || '').trim();
     const driver = String(req.nextUrl.searchParams.get('driver') || '').trim();
     const tripsheet = String(req.nextUrl.searchParams.get('tripsheet') || '').trim();
+    const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(req.nextUrl.searchParams.get('route') || '').trim();
 
     const filter: Record<string, any> = {};
 
@@ -40,7 +42,34 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
     const rows = await db.collection('cheques').find(filter).sort({ date: -1, createdAt: -1 }).toArray();
 
-    return NextResponse.json(rows.map((r) => ({ ...r, _id: r._id.toString() })));
+    if (!firm && !route) {
+      return NextResponse.json(rows.map((r) => ({ ...r, _id: r._id.toString() })));
+    }
+
+    const invoiceNumbers = Array.from(new Set(rows.map((r) => String(r.invoiceNumber || '')).filter(Boolean)));
+    const invoiceFilter: Record<string, any> = { invoiceNumber: { $in: invoiceNumbers } };
+    if (firm) invoiceFilter.firm = firm;
+    if (route) invoiceFilter.route = { $regex: route, $options: 'i' };
+
+    const matchedInvoices = await db
+      .collection('invoices')
+      .find(invoiceFilter)
+      .project({ invoiceNumber: 1, firm: 1, route: 1 })
+      .toArray();
+
+    const invoiceMap = new Map(
+      matchedInvoices.map((inv) => [String(inv.invoiceNumber || ''), { firm: inv.firm || '', route: inv.route || '' }]),
+    );
+
+    const filteredRows = rows
+      .filter((r) => invoiceMap.has(String(r.invoiceNumber || '')))
+      .map((r) => ({
+        ...r,
+        firm: invoiceMap.get(String(r.invoiceNumber || ''))?.firm || null,
+        route: invoiceMap.get(String(r.invoiceNumber || ''))?.route || null,
+      }));
+
+    return NextResponse.json(filteredRows.map((r) => ({ ...r, _id: r._id.toString() })));
   } catch {
     return NextResponse.json({ error: 'Internal server error while loading cheques.' }, { status: 500 });
   }

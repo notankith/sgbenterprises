@@ -16,7 +16,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       { $set: { agentName: body.agentName, invoiceNumbers, updatedAt: new Date().toISOString() } },
     );
 
-    await db.collection('invoices').updateMany({ assignedTripId: id }, { $unset: { assignedTripId: '' }, $set: { deliveryPerson: null } });
+    await db.collection('invoices').updateMany(
+      { assignedTripId: id, deliveryStatus: { $ne: 'delivered' } },
+      { $unset: { assignedTripId: '' }, $set: { deliveryPerson: null } },
+    );
+    await db.collection('invoices').updateMany(
+      { assignedTripId: id, deliveryStatus: 'delivered' },
+      { $unset: { assignedTripId: '' } },
+    );
     if (invoiceNumbers.length > 0) {
       await db.collection('invoices').updateMany(
         { invoiceNumber: { $in: invoiceNumbers } },

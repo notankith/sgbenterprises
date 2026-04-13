@@ -7,9 +7,46 @@ export async function GET(req: NextRequest) {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const db = await getDb();
     const status = req.nextUrl.searchParams.get('status') || 'pending';
+    const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(req.nextUrl.searchParams.get('route') || '').trim().toLowerCase();
     const filter = status === 'all' ? {} : { status };
     const rows = await db.collection('approvals').find(filter).sort({ createdAt: -1 }).toArray();
-    return NextResponse.json(rows.map((r) => ({ ...r, _id: r._id.toString() })));
+
+    if (!firm && !route) {
+      return NextResponse.json(rows.map((r) => ({ ...r, _id: r._id.toString() })));
+    }
+
+    const paymentInvoiceNumbers = Array.from(
+      new Set(
+        rows
+          .filter((r) => r.type === 'payment')
+          .map((r) => String(r.payload?.invoiceNumber || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const invoiceFilter: Record<string, any> = { invoiceNumber: { $in: paymentInvoiceNumbers } };
+    if (firm) invoiceFilter.firm = firm;
+    if (route) invoiceFilter.route = { $regex: route, $options: 'i' };
+
+    const invoiceRows = paymentInvoiceNumbers.length
+      ? await db.collection('invoices').find(invoiceFilter).project({ invoiceNumber: 1 }).toArray()
+      : [];
+    const matchedPaymentInvoices = new Set(invoiceRows.map((x) => String(x.invoiceNumber || '')));
+
+    const filtered = rows.filter((row) => {
+      if (row.type === 'payment') {
+        return matchedPaymentInvoices.has(String(row.payload?.invoiceNumber || ''));
+      }
+
+      const expenseFirm = String(row.payload?.firm || '').trim().toUpperCase();
+      const expenseRoute = String(row.payload?.route || '').trim().toLowerCase();
+      const matchesFirm = firm ? expenseFirm === firm : true;
+      const matchesRoute = route ? expenseRoute.includes(route) : true;
+      return matchesFirm && matchesRoute;
+    });
+
+    return NextResponse.json(filtered.map((r) => ({ ...r, _id: r._id.toString() })));
   } catch {
     return NextResponse.json(
       { error: 'Internal server error while loading approvals.' },

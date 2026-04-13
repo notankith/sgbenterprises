@@ -31,7 +31,7 @@ export default function LoginForm() {
       <div className="card w-full max-w-md p-6 shadow-panel">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-slate-900">Logistics Console</h1>
+            <h1 className="text-xl font-semibold text-slate-900">SGB Enterprises</h1>
             <p className="mt-1 text-sm text-slate-500">Sign in to continue.</p>
           </div>
           <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">Admin</span>

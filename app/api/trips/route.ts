@@ -22,22 +22,72 @@ function hasPendingBalance(invoice: {
 export async function GET(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const dateFrom = String(req.nextUrl.searchParams.get('dateFrom') || '').trim();
+    const dateTo = String(req.nextUrl.searchParams.get('dateTo') || '').trim();
+    const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(req.nextUrl.searchParams.get('route') || '').trim();
+
     const db = await getDb();
-    const rows = await db.collection('trip_sheets').find({}).sort({ createdAt: -1 }).toArray();
-    const invoiceNumbers = rows.flatMap((r) => (Array.isArray(r.invoiceNumbers) ? r.invoiceNumbers : [])).filter(Boolean);
+    const tripFilter: Record<string, any> = {};
+    if (dateFrom || dateTo) {
+      tripFilter.createdAt = {};
+      if (dateFrom) tripFilter.createdAt.$gte = dateFrom;
+      if (dateTo) tripFilter.createdAt.$lte = dateTo;
+    }
+
+    const rows = await db.collection('trip_sheets').find(tripFilter).sort({ createdAt: -1 }).toArray();
+
+    const emptyCompletedTripIds = rows
+      .filter((r) => (r.completedAt || String(r.status || '').toLowerCase() === 'complete') && (!Array.isArray(r.invoiceNumbers) || r.invoiceNumbers.length === 0))
+      .map((r) => r._id.toString());
+
+    const paymentsByTrip = new Map<string, string[]>();
+    if (emptyCompletedTripIds.length) {
+      const paymentRows = await db
+        .collection('payments')
+        .find({ tripsheetId: { $in: emptyCompletedTripIds } })
+        .project({ tripsheetId: 1, invoiceNumber: 1 })
+        .toArray();
+
+      paymentRows.forEach((row) => {
+        const tripId = String(row.tripsheetId || '').trim();
+        const invoiceNumber = String(row.invoiceNumber || '').trim();
+        if (!tripId || !invoiceNumber) return;
+        if (!paymentsByTrip.has(tripId)) paymentsByTrip.set(tripId, []);
+        const arr = paymentsByTrip.get(tripId)!;
+        if (!arr.includes(invoiceNumber)) arr.push(invoiceNumber);
+      });
+    }
+
+    const invoiceNumbers = rows
+      .flatMap((r) => {
+        const own = Array.isArray(r.invoiceNumbers) ? r.invoiceNumbers : [];
+        if (own.length) return own;
+        return paymentsByTrip.get(r._id.toString()) || [];
+      })
+      .filter(Boolean);
+
+    const invoiceFilter: Record<string, any> = { invoiceNumber: { $in: invoiceNumbers } };
+    if (firm) invoiceFilter.firm = firm;
+    if (route) invoiceFilter.route = { $regex: route, $options: 'i' };
 
     const invoices = invoiceNumbers.length
       ? await db
           .collection('invoices')
-          .find({ invoiceNumber: { $in: invoiceNumbers } })
-          .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, deliveryStatus: 1 })
+          .find(invoiceFilter)
+          .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, paidAmount: 1, paymentStatus: 1, deliveryStatus: 1, date: 1, firm: 1, route: 1 })
           .toArray()
       : [];
 
     const invoiceMap = new Map(invoices.map((i) => [i.invoiceNumber, i]));
 
     const enriched = rows.map((r) => {
-      const details = (r.invoiceNumbers || [])
+      const historicalInvoiceNumbers = Array.isArray(r.invoiceNumbers) && r.invoiceNumbers.length
+        ? r.invoiceNumbers
+        : (paymentsByTrip.get(r._id.toString()) || []);
+
+      const details = historicalInvoiceNumbers
         .map((n: string) => {
           const inv = invoiceMap.get(n);
           if (!inv) return null;
@@ -45,27 +95,36 @@ export async function GET(req: NextRequest) {
             invoiceNumber: inv.invoiceNumber,
             shopName: inv.shopName || '-',
             totalAmount: Number(inv.totalAmount || 0),
+            paidAmount: Number(inv.paidAmount || 0),
+            paymentStatus: String(inv.paymentStatus || 'unpaid'),
             deliveryStatus: inv.deliveryStatus || 'pending',
+            date: String(inv.date || ''),
+            firm: String(inv.firm || ''),
+            route: String(inv.route || ''),
           };
         })
-        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; deliveryStatus: string }>;
+        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; paidAmount: number; paymentStatus: string; deliveryStatus: string; date: string; firm: string; route: string }>;
 
       const totalAmount = details.reduce((sum, d) => sum + Number(d.totalAmount || 0), 0);
-      const status = details.length && details.every((d) => d.deliveryStatus === 'delivered') ? 'Complete' : 'In Progress';
+      const settledAndDelivered = details.length > 0 && details.every((d) => d.deliveryStatus === 'delivered' && (d.paymentStatus === 'paid' || Number(d.paidAmount || 0) >= Number(d.totalAmount || 0)));
+      const status = r.completedAt || String(r.status || '').toLowerCase() === 'complete' ? 'Complete' : 'In Progress';
 
       return {
         ...r,
         _id: r._id.toString(),
         agentId: r.agentId ? String(r.agentId) : undefined,
         invoiceIds: Array.isArray(r.invoiceIds) ? r.invoiceIds.map((id: ObjectId) => id.toString()) : [],
+        invoiceNumbers: historicalInvoiceNumbers,
         invoiceCount: details.length,
         totalAmount,
         status,
+        completedAt: r.completedAt ? String(r.completedAt) : null,
+        canComplete: !r.completedAt && settledAndDelivered,
         invoices: details,
       };
     });
 
-    return NextResponse.json(enriched);
+    return NextResponse.json((firm || route) ? enriched.filter((x) => x.invoiceCount > 0) : enriched);
   } catch {
     return NextResponse.json(
       { error: 'Internal server error while loading trip sheets.' },

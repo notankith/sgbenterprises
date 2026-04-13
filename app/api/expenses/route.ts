@@ -6,8 +6,15 @@ import { isLoggedInRequest } from '@/lib/auth';
 export async function GET(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(req.nextUrl.searchParams.get('route') || '').trim();
+
+    const filter: Record<string, any> = {};
+    if (firm) filter.firm = firm;
+    if (route) filter.route = { $regex: route, $options: 'i' };
+
     const db = await getDb();
-    const rows = await db.collection('expenses').find({}).sort({ date: -1 }).toArray();
+    const rows = await db.collection('expenses').find(filter).sort({ date: -1 }).toArray();
     return NextResponse.json(rows.map((r) => ({ ...r, _id: r._id.toString() })));
   } catch {
     return NextResponse.json(
@@ -28,8 +35,7 @@ export async function POST(req: NextRequest) {
     const date = String(body.date || '').trim();
     const amount = Number(body.amount || 0);
     const category = String(body.category || body.type || '').trim();
-    const addedBy = String(body.addedBy || 'Admin').trim();
-    const notes = String(body.notes || body.note || '').trim();
+    const paidBy = String(body.paidBy || body.addedBy || 'Admin').trim();
 
     if (!date || !category || !Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json({ error: 'date, category, and valid amount are required' }, { status: 400 });
@@ -40,8 +46,7 @@ export async function POST(req: NextRequest) {
         date,
         amount,
         category,
-        addedBy,
-        notes,
+        addedBy: paidBy || 'Admin',
         status: 'approved',
         approvedAt: now,
         createdAt: now,
@@ -57,11 +62,9 @@ export async function POST(req: NextRequest) {
         date,
         amount,
         category,
-        addedBy,
-        notes,
+        addedBy: paidBy || 'Admin',
         agentId: body.agentId || undefined,
         type: body.type || category || 'Other',
-        note: notes,
         createdAt: now,
       },
     };

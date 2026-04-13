@@ -17,8 +17,10 @@ export async function POST(req: NextRequest) {
     const clean = rows
       .filter((r) => !r.duplicate && !r.hasError)
       .map((r) => ({
+        firm: String(r.firm || '').trim().toUpperCase(),
         invoiceNumber: String(r.invoiceNumber || '').trim(),
         date: String(r.date || '').trim(),
+        route: String(r.route || '').trim(),
         shopName: String(r.shopName || '').trim(),
         totalAmount: Number(r.totalAmount || 0),
         paidAmount: 0,
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
         paymentHistory: [],
         createdAt: new Date().toISOString(),
       }))
-      .filter((r) => r.invoiceNumber && r.shopName && r.date && r.totalAmount > 0);
+      .filter((r) => r.firm && r.invoiceNumber && r.date && r.route && r.shopName && r.totalAmount > 0);
 
     if (!clean.length) {
       return NextResponse.json({

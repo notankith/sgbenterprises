@@ -6,9 +6,23 @@ export async function GET(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(req.nextUrl.searchParams.get('route') || '').trim();
+
+    const invoiceFilter: Record<string, any> = { archived: { $ne: true } };
+    const expenseFilter: Record<string, any> = {};
+    if (firm) {
+      invoiceFilter.firm = firm;
+      expenseFilter.firm = firm;
+    }
+    if (route) {
+      invoiceFilter.route = { $regex: route, $options: 'i' };
+      expenseFilter.route = { $regex: route, $options: 'i' };
+    }
+
     const db = await getDb();
-    const invoices = await db.collection('invoices').find({ archived: { $ne: true } }).toArray();
-    const expenses = await db.collection('expenses').find({}).toArray();
+    const invoices = await db.collection('invoices').find(invoiceFilter).toArray();
+    const expenses = await db.collection('expenses').find(expenseFilter).toArray();
     const trips = await db.collection('trip_sheets').find({}).toArray();
 
   const totalInvoices = invoices.length;

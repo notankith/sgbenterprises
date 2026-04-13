@@ -14,8 +14,8 @@ const inter = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'Internal Logistics Dashboard',
-  description: 'Internal logistics and finance control panel',
+  title: 'SGB Internal Console',
+  description: 'SGB Enterprises internal console & invoice management system',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

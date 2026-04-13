@@ -7,6 +7,7 @@ export async function GET(req: NextRequest) {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(req.url);
+    const meta = String(searchParams.get('meta') || '').trim().toLowerCase();
     const q = searchParams.get('q') || '';
     const invoiceNumberQuery = searchParams.get('invoiceNumber') || '';
     const shopNameQuery = searchParams.get('shopName') || '';
@@ -14,12 +15,33 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get('dateTo') || '';
     const amountMin = searchParams.get('amountMin') || '';
     const amountMax = searchParams.get('amountMax') || '';
+    const firm = String(searchParams.get('firm') || '').trim().toUpperCase();
+    const route = String(searchParams.get('route') || '').trim();
     const paymentStatus = searchParams.get('paymentStatus');
     const deliveryStatus = searchParams.get('deliveryStatus');
     const page = Number(searchParams.get('page') || '1');
     const pageSize = Number(searchParams.get('pageSize') || '20');
 
     const db = await getDb();
+
+    if (meta === 'filters') {
+      const [firms, routes] = await Promise.all([
+        db.collection('invoices').distinct('firm', {
+          archived: { $ne: true },
+          firm: { $exists: true, $nin: [null, ''] },
+        }),
+        db.collection('invoices').distinct('route', {
+          archived: { $ne: true },
+          route: { $exists: true, $nin: [null, ''] },
+        }),
+      ]);
+
+      return NextResponse.json({
+        firms: firms.map((x) => String(x)).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+        routes: routes.map((x) => String(x)).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      });
+    }
+
     const filter: Record<string, any> = { archived: { $ne: true } };
 
     if (invoiceNumberQuery) {
@@ -60,6 +82,8 @@ export async function GET(req: NextRequest) {
 
     if (paymentStatus) filter.paymentStatus = paymentStatus;
     if (deliveryStatus) filter.deliveryStatus = deliveryStatus;
+    if (firm) filter.firm = firm;
+    if (route) filter.route = { $regex: route, $options: 'i' };
 
     const total = await db.collection('invoices').countDocuments(filter);
     const rows = await db
@@ -91,13 +115,15 @@ export async function PATCH(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await req.json();
-    const { invoiceNumber, totalAmount, archive } = body;
+    const { invoiceNumber, totalAmount, archive, firm, route } = body;
     if (!invoiceNumber) return NextResponse.json({ error: 'invoiceNumber is required' }, { status: 400 });
 
     const db = await getDb();
     const updates: Record<string, any> = {};
     if (typeof totalAmount === 'number') updates.totalAmount = totalAmount;
     if (typeof archive === 'boolean') updates.archived = archive;
+    if (typeof firm === 'string') updates.firm = firm.trim().toUpperCase();
+    if (typeof route === 'string') updates.route = route.trim();
 
     await db.collection('invoices').updateOne({ invoiceNumber }, { $set: updates });
     return NextResponse.json({ success: true });

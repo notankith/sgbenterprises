@@ -58,7 +58,7 @@ type InvoiceRow = {
   shopName: string;
   totalAmount: number;
   paidAmount: number;
-  paymentStatus: 'paid' | 'partial' | 'unpaid';
+  paymentStatus: 'paid' | 'partial' | 'unpaid' | 'payable';
   deliveryStatus: 'delivered' | 'pending';
   deliveryPerson?: string | null;
   assignedTripId?: string;
@@ -218,11 +218,22 @@ function formatDateOnly(value?: string) {
 }
 
 function statusBadgeClass(status: string) {
-  if (status === 'paid') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (status === 'partial') return 'bg-amber-50 text-amber-700 border-amber-200';
-  if (status === 'unpaid') return 'bg-rose-50 text-rose-700 border-rose-200';
+  if (status === 'paid' || status === 'settled') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  if (status === 'partial' || status === 'unpaid' || status === 'pending') return 'bg-amber-50 text-amber-700 border-amber-200';
+  if (status === 'payable') return 'bg-rose-50 text-rose-700 border-rose-200';
   if (status === 'delivered') return 'bg-sky-50 text-sky-700 border-sky-200';
   return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function getInvoiceBalance(totalAmount: number, totalReceived: number) {
+  return Number(totalAmount || 0) - Number(totalReceived || 0);
+}
+
+function getPaymentState(totalAmount: number, totalReceived: number): 'pending' | 'settled' | 'payable' {
+  const balance = getInvoiceBalance(totalAmount, totalReceived);
+  if (balance < 0) return 'payable';
+  if (balance === 0) return 'settled';
+  return 'pending';
 }
 
 function useDebouncedValue<T>(value: T, delay = 350) {
@@ -335,6 +346,15 @@ export default function LogisticsApp() {
 
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
   const [chequesLoading, setChequesLoading] = useState(false);
+  const [chequeForm, setChequeForm] = useState({
+    chequeNumber: '',
+    amount: '',
+    date: new Date().toISOString().slice(0, 10),
+    invoiceNumber: '',
+    bankName: '',
+    driverName: '',
+    tripsheetId: '',
+  });
   const [chequeFilters, setChequeFilters] = useState({
     status: '',
     dateFrom: '',
@@ -727,12 +747,12 @@ export default function LogisticsApp() {
   }
 
   function openPaymentModal(invoice: InvoiceRow) {
-    const remaining = Math.max(0, Number(invoice.totalAmount || 0) - Number(invoice.paidAmount || 0));
+    const balance = getInvoiceBalance(Number(invoice.totalAmount || 0), Number(invoice.paidAmount || 0));
     setPaymentModalInvoice(invoice);
     setPaymentForm({
       mode: 'cash',
-      amount: remaining ? String(remaining) : '',
-      receivedBy: '',
+      amount: balance ? String(balance) : '',
+      receivedBy: 'Admin',
       date: new Date().toISOString().slice(0, 10),
       reference: '',
     });
@@ -740,55 +760,46 @@ export default function LogisticsApp() {
     setShowPaymentModal(true);
   }
 
-  async function submitPaymentApproval() {
+  async function submitPayment() {
     if (!paymentModalInvoice) return;
 
     const amount = Number(paymentForm.amount);
     const mode = String(paymentForm.mode || '').toLowerCase();
-    const receivedBy = paymentForm.receivedBy.trim();
+    const receivedBy = paymentForm.receivedBy.trim() || 'Admin';
     const reference = paymentForm.reference.trim();
 
     if (!['cash', 'upi', 'cheque'].includes(mode)) {
       setPaymentFormError('Select a valid payment mode.');
       return;
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setPaymentFormError('Enter a valid payment amount.');
+    if (!Number.isFinite(amount) || amount === 0) {
+      setPaymentFormError('Enter a valid payment amount (positive or negative).');
       return;
     }
-    if (!receivedBy) {
-      setPaymentFormError('Received By is required.');
-      return;
-    }
-
     const chequeReference = mode === 'cheque' ? (reference || null) : null;
 
-    await fetchJson('/api/approvals', {
+    await fetchJson('/api/payments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type: 'payment',
-        payload: {
-          invoiceNumber: paymentModalInvoice.invoiceNumber,
-          invoiceId: paymentModalInvoice._id,
-          amount,
-          mode,
-          date: paymentForm.date,
-          collectedBy: receivedBy,
-          role: 'admin',
-          reference: reference || null,
-          chequeNumber: chequeReference,
-          bankName: mode === 'cheque' ? 'N/A' : null,
-          status: 'pending',
-          tripsheetId: paymentModalInvoice.assignedTripId || null,
-          driverName: paymentModalInvoice.deliveryPerson || 'Unknown',
-        },
+        invoiceNumber: paymentModalInvoice.invoiceNumber,
+        invoiceId: paymentModalInvoice._id,
+        amount,
+        mode,
+        date: paymentForm.date,
+        collectedBy: receivedBy,
+        role: 'admin',
+        reference: reference || null,
+        chequeNumber: chequeReference,
+        bankName: mode === 'cheque' ? 'N/A' : null,
+        tripsheetId: paymentModalInvoice.assignedTripId || null,
+        driverName: paymentModalInvoice.deliveryPerson || 'Unknown',
       }),
     });
 
     setShowPaymentModal(false);
     setPaymentModalInvoice(null);
-    await loadApprovals();
+    await Promise.all([loadInvoices(), loadSummary(), mode === 'cheque' ? loadCheques() : Promise.resolve()]);
   }
 
   function openNoteModal(invoice: InvoiceRow) {
@@ -917,6 +928,44 @@ export default function LogisticsApp() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     });
+    await Promise.all([loadCheques(), loadInvoices(), loadSummary()]);
+  }
+
+  async function addChequeDirectly() {
+    const chequeNumber = chequeForm.chequeNumber.trim();
+    const invoiceNumber = chequeForm.invoiceNumber.trim();
+    const bankName = chequeForm.bankName.trim();
+    const date = chequeForm.date;
+    const amount = Number(chequeForm.amount);
+
+    if (!chequeNumber || !invoiceNumber || !bankName || !date || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Cheque Number, Amount, Date, Invoice Number, and Bank are required.');
+    }
+
+    await fetchJson('/api/cheques', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chequeNumber,
+        amount,
+        date,
+        invoiceNumber,
+        bankName,
+        driverName: chequeForm.driverName.trim(),
+        tripsheetId: chequeForm.tripsheetId.trim(),
+      }),
+    });
+
+    setChequeForm({
+      chequeNumber: '',
+      amount: '',
+      date: new Date().toISOString().slice(0, 10),
+      invoiceNumber: '',
+      bankName: '',
+      driverName: '',
+      tripsheetId: '',
+    });
+
     await Promise.all([loadCheques(), loadInvoices(), loadSummary()]);
   }
 
@@ -1662,11 +1711,13 @@ export default function LogisticsApp() {
                                         <div>
                                           <p className="font-medium text-slate-900">{inv.invoiceNumber}</p>
                                           <p className="text-xs text-slate-500">{inv.shopName} · {inv.route || 'No Route'} · {inv.firm || 'No Firm'}</p>
-                                          <p className="text-xs text-slate-500">Date: {formatDateOnly(inv.date)} · Paid: {formatMoney(inv.paidAmount || 0)}</p>
+                                          <p className="text-xs text-slate-500">Date: {formatDateOnly(inv.date)} · Received: {formatMoney(inv.paidAmount || 0)}</p>
                                         </div>
                                         <div className="flex items-center gap-3">
                                           <Badge className={statusBadgeClass(inv.deliveryStatus)}>{inv.deliveryStatus}</Badge>
-                                          <Badge className={statusBadgeClass(inv.paymentStatus)}>{inv.paymentStatus}</Badge>
+                                          <Badge className={statusBadgeClass(getPaymentState(Number(inv.totalAmount || 0), Number(inv.paidAmount || 0)))}>
+                                            {getPaymentState(Number(inv.totalAmount || 0), Number(inv.paidAmount || 0))}
+                                          </Badge>
                                           <span className="text-slate-600">{formatMoney(inv.totalAmount)}</span>
                                         </div>
                                       </div>
@@ -1791,6 +1842,61 @@ export default function LogisticsApp() {
               <div className="border-b border-slate-200 px-5 py-4">
                 <h3 className="text-sm font-semibold text-slate-900">Cheques</h3>
                 <p className="mt-1 text-xs text-slate-500">Track cheque lifecycle and reconcile invoice balances.</p>
+              </div>
+
+              <div className="border-b border-slate-200 px-5 py-4">
+                <div className="grid gap-2 md:grid-cols-4">
+                  <input
+                    value={chequeForm.chequeNumber}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, chequeNumber: e.target.value }))}
+                    placeholder="Cheque Number"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    type="number"
+                    value={chequeForm.amount}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, amount: e.target.value }))}
+                    placeholder="Amount"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={chequeForm.date}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, date: e.target.value }))}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={chequeForm.invoiceNumber}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                    placeholder="Invoice Number"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={chequeForm.bankName}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, bankName: e.target.value }))}
+                    placeholder="Bank"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={chequeForm.driverName}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, driverName: e.target.value }))}
+                    placeholder="Driver (optional)"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={chequeForm.tripsheetId}
+                    onChange={(e) => setChequeForm((prev) => ({ ...prev, tripsheetId: e.target.value }))}
+                    placeholder="Tripsheet (optional)"
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <button
+                    onClick={() => runAction('create-cheque', addChequeDirectly).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to add cheque'))}
+                    disabled={isActionLoading('create-cheque')}
+                    className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700 disabled:opacity-50"
+                  >
+                    {isActionLoading('create-cheque') ? 'Adding...' : 'Add Cheque'}
+                  </button>
+                </div>
               </div>
 
               <div className="grid gap-2 border-b border-slate-200 px-5 py-3 md:grid-cols-5">
@@ -2147,16 +2253,17 @@ export default function LogisticsApp() {
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setShowPaymentModal(false)}
+                    disabled={isActionLoading('submit-payment')}
                     className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => runAction('submit-payment-approval', submitPaymentApproval).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to submit payment'))}
-                    disabled={isActionLoading('submit-payment-approval')}
+                    onClick={() => runAction('submit-payment', submitPayment).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to record payment'))}
+                    disabled={isActionLoading('submit-payment')}
                     className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white disabled:opacity-50"
                   >
-                    {isActionLoading('submit-payment-approval') ? 'Submitting...' : 'Submit'}
+                    {isActionLoading('submit-payment') ? 'Confirming...' : 'Confirm'}
                   </button>
                 </div>
               </div>
@@ -2302,7 +2409,12 @@ function InvoiceTable({
         accessorKey: 'paymentStatus',
         header: 'Payment Status',
         meta: { filter: 'paymentStatus' },
-        cell: (info) => <Badge className={statusBadgeClass(String(info.getValue()))}>{String(info.getValue())}</Badge>,
+        cell: (info) => {
+          const total = Number(info.row.original.totalAmount || 0);
+          const received = Number(info.row.original.paidAmount || 0);
+          const state = getPaymentState(total, received);
+          return <Badge className={statusBadgeClass(state)}>{state}</Badge>;
+        },
       },
     ],
     [],
@@ -2494,20 +2606,31 @@ function InvoiceTable({
 
                                     <div className="rounded-lg border border-slate-200 bg-white p-4">
                                       <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Summary</h4>
+                                      {(() => {
+                                        const totalAmount = Number(row.original.totalAmount || 0);
+                                        const paidAmount = Number(row.original.paidAmount || 0);
+                                        const balance = getInvoiceBalance(totalAmount, paidAmount);
+                                        const isPayable = balance < 0;
+
+                                        return (
                                       <div className="mt-3 grid gap-2 text-sm">
                                         <div className="flex items-center justify-between">
                                           <span className="text-slate-500">Total Amount</span>
-                                          <span className="font-medium text-slate-900">{formatMoney(Number(row.original.totalAmount || 0))}</span>
+                                          <span className="font-medium text-slate-900">{formatMoney(totalAmount)}</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                           <span className="text-slate-500">Total Paid</span>
-                                          <span className="font-medium text-slate-900">{formatMoney(Number(row.original.paidAmount || 0))}</span>
+                                          <span className="font-medium text-slate-900">{formatMoney(paidAmount)}</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                           <span className="text-slate-500">Remaining</span>
-                                          <span className="font-medium text-slate-900">{formatMoney(Math.max(0, Number(row.original.totalAmount || 0) - Number(row.original.paidAmount || 0)))}</span>
+                                          <span className={`font-medium ${isPayable ? 'text-rose-700' : 'text-slate-900'}`}>
+                                            {isPayable ? `-${formatMoney(Math.abs(balance))}` : formatMoney(balance)}
+                                          </span>
                                         </div>
                                       </div>
+                                        );
+                                      })()}
                                     </div>
 
                                     <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -2716,9 +2839,9 @@ function InvoiceHeader({
               className="rounded-lg border border-slate-200 px-2 py-1 text-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
             >
               <option value="">All</option>
-              <option value="paid">Paid</option>
-              <option value="partial">Partial</option>
-              <option value="unpaid">Unpaid</option>
+              <option value="unpaid">Pending</option>
+              <option value="paid">Settled</option>
+              <option value="payable">Payable</option>
             </select>
           ) : null}
           <button onClick={close} className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] text-slate-500">

@@ -3,9 +3,10 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
-function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'partial' | 'paid' {
-  if (totalAmount > 0 && amountPaid >= totalAmount) return 'paid';
-  if (amountPaid > 0) return 'partial';
+function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'paid' | 'payable' {
+  const balance = Number(totalAmount || 0) - Number(amountPaid || 0);
+  if (balance < 0) return 'payable';
+  if (balance === 0) return 'paid';
   return 'unpaid';
 }
 

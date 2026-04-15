@@ -98,6 +98,22 @@ function normalizeImportDate(value: unknown, importYear: number) {
   return null;
 }
 
+function parseImportAmount(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const text = String(value ?? '').trim();
+  if (!text) return Number.NaN;
+
+  const normalized = text.replace(/,/g, '');
+  const accountingNegative = normalized.match(/^\((.+)\)$/);
+  if (accountingNegative) {
+    const parsed = Number(accountingNegative[1]);
+    return Number.isFinite(parsed) ? -parsed : Number.NaN;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
 function isTotalFooterRow(firm: string, invoiceNumber: string, shopName: string, route: string, date: string) {
   const normalizedFirm = firm.toLowerCase().trim();
   const normalizedInvoice = invoiceNumber.toLowerCase().trim();
@@ -178,7 +194,7 @@ export async function POST(req: NextRequest) {
           return null;
         }
 
-        const totalAmount = Number(String(r[amountIdx] || '').replace(/,/g, ''));
+        const totalAmount = parseImportAmount(r[amountIdx]);
         const errors: Array<{ field: string; message: string }> = [];
 
         if (!firm) errors.push({ field: 'firm', message: 'Missing firm (CmpCode)' });
@@ -190,8 +206,8 @@ export async function POST(req: NextRequest) {
         } else if (!date) {
           errors.push({ field: 'date', message: 'Invalid date format. Use dd/mm, dd/mm/yyyy, or dd/mm/yy' });
         }
-        if (Number.isNaN(totalAmount) || totalAmount <= 0) {
-          errors.push({ field: 'totalAmount', message: 'Invalid amount' });
+        if (Number.isNaN(totalAmount) || totalAmount === 0) {
+          errors.push({ field: 'totalAmount', message: 'Invalid amount (zero is not allowed)' });
         }
 
         return {

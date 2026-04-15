@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
         paymentHistory: [],
         createdAt: new Date().toISOString(),
       }))
-      .filter((r) => r.firm && r.invoiceNumber && r.date && r.route && r.shopName && r.totalAmount > 0);
+      .filter((r) => r.firm && r.invoiceNumber && r.date && r.route && r.shopName && Number.isFinite(r.totalAmount) && r.totalAmount !== 0);
 
     if (!clean.length) {
       return NextResponse.json({

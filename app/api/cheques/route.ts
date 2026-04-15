@@ -69,6 +69,11 @@ export async function POST(req: NextRequest) {
     }
 
     const db = await getDb();
+    const invoice = await db.collection('invoices').findOne({ invoiceNumber });
+    if (!invoice) {
+      return NextResponse.json({ error: 'Linked invoice number not found' }, { status: 404 });
+    }
+
     const duplicate = await db.collection('cheques').findOne({ chequeNumber, invoiceNumber });
     if (duplicate) {
       return NextResponse.json({ error: 'Cheque already exists for this invoice' }, { status: 409 });

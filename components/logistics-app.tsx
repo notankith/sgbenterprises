@@ -216,6 +216,19 @@ function StatCard({ label, value, icon: Icon, tone }: { label: string; value: st
   );
 }
 
+function CardSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="card p-5">
+      <div className="h-4 w-40 animate-pulse rounded bg-slate-200" />
+      <div className="mt-4 space-y-2">
+        {Array.from({ length: rows }).map((_, index) => (
+          <div key={index} className="h-12 animate-pulse rounded-lg bg-slate-100" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function LogisticsApp() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [apiError, setApiError] = useState('');
@@ -302,6 +315,14 @@ export default function LogisticsApp() {
     driver: '',
     tripsheet: '',
   });
+  const [manualChequeForm, setManualChequeForm] = useState({
+    invoiceNumber: '',
+    chequeNumber: '',
+    date: new Date().toISOString().slice(0, 10),
+    bankName: '',
+    amount: '',
+    action: 'manual_entry',
+  });
 
   const debouncedInvoiceNumber = useDebouncedValue(invoiceFilters.invoiceNumber);
   const debouncedShopName = useDebouncedValue(invoiceFilters.shopName);
@@ -351,6 +372,7 @@ export default function LogisticsApp() {
   }, [agents, selectedAgentId, tripSheets, tripFilters.dateFrom, tripFilters.dateTo, tripFilters.driver]);
 
   const paymentApprovals = approvals.filter((a) => a.type === 'payment' && a.status === 'pending');
+  const expenseApprovals = approvals.filter((a) => a.type === 'expense' && a.status === 'pending');
 
   const groupedPaymentApprovals = useMemo(() => {
     const groups = new Map<string, { key: string; tripsheetId: string; driverName: string; date: string; rows: ApprovalRow[] }>();
@@ -600,6 +622,8 @@ export default function LogisticsApp() {
           invoiceNumber: paymentModalInvoice.invoiceNumber,
           invoiceId: paymentModalInvoice._id,
           totalAmount: Number(paymentModalInvoice.totalAmount || 0),
+          deductedAmount: Number(paymentModalInvoice.deductedAmount || 0),
+          deductions: Array.isArray(paymentModalInvoice.deductions) ? paymentModalInvoice.deductions : [],
           amount,
           mode,
           date: paymentForm.date,
@@ -786,6 +810,46 @@ export default function LogisticsApp() {
     await Promise.all([loadExpenses(), loadSummary()]);
   }
 
+  async function createManualCheque() {
+    const amount = Number(manualChequeForm.amount);
+    const invoiceNumber = manualChequeForm.invoiceNumber.trim();
+    const chequeNumber = manualChequeForm.chequeNumber.trim();
+    const date = manualChequeForm.date;
+    const bankName = manualChequeForm.bankName.trim();
+
+    if (!invoiceNumber || !chequeNumber || !date || !bankName || !Number.isFinite(amount) || amount <= 0) {
+      setApiError('Invoice number, cheque number, date, bank name, and valid amount are required.');
+      return;
+    }
+
+    await fetchJson('/api/cheques', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        invoiceNumber,
+        chequeNumber,
+        date,
+        bankName,
+        amount,
+      }),
+    });
+
+    setManualChequeForm({
+      invoiceNumber: '',
+      chequeNumber: '',
+      date: new Date().toISOString().slice(0, 10),
+      bankName: '',
+      amount: '',
+      action: 'manual_entry',
+    });
+    await Promise.all([loadCheques(), loadInvoices(), loadSummary()]);
+  }
+
+  async function completeTripSheet(tripId: string) {
+    await fetchJson(`/api/trips/${tripId}/complete`, { method: 'POST' });
+    await Promise.all([loadTripSheets(), loadInvoices(), loadSummary()]);
+  }
+
   async function exportData() {
     const selectedTypes = Object.entries(exportTypes)
       .filter(([, value]) => value)
@@ -897,6 +961,14 @@ export default function LogisticsApp() {
           {apiError ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
               {apiError}
+            </div>
+          ) : null}
+
+          {pageLoading && activeTab === 'dashboard' ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="card h-28 animate-pulse bg-slate-100" />
+              ))}
             </div>
           ) : null}
 
@@ -1119,6 +1191,13 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {pageLoading && activeTab === 'trips' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={4} />
+              <CardSkeleton rows={5} />
+            </div>
+          ) : null}
+
           {!pageLoading && activeTab === 'trips' ? (
             <div className="space-y-4">
                 <div className="card p-5">
@@ -1327,20 +1406,30 @@ export default function LogisticsApp() {
 
                       {filteredTripHistory.map((t) => (
                         <div key={t._id} className="rounded-lg border border-slate-200 bg-white">
-                          <button
-                            onClick={() => setExpandedTrip(expandedTrip === t._id ? null : t._id)}
-                            className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm hover:bg-slate-50"
-                          >
-                            <div>
-                              <p className="font-medium text-slate-900">{t.agentName}</p>
-                              <p className="text-xs text-slate-500">
-                                {t.invoiceCount} invoices · {formatMoney(t.totalAmount)} · {new Date(t.createdAt).toLocaleString()}
-                              </p>
-                            </div>
-                            <Badge className={t.status === 'Complete' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
-                              {t.status}
-                            </Badge>
-                          </button>
+                          <div className="flex items-center gap-2 px-2 py-1">
+                            <button
+                              onClick={() => setExpandedTrip(expandedTrip === t._id ? null : t._id)}
+                              className="flex flex-1 items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50"
+                            >
+                              <div>
+                                <p className="font-medium text-slate-900">{t.agentName}</p>
+                                <p className="text-xs text-slate-500">
+                                  {t.invoiceCount} invoices · {formatMoney(t.totalAmount)} · {new Date(t.createdAt).toLocaleString()}
+                                </p>
+                              </div>
+                              <Badge className={t.status === 'Complete' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
+                                {t.status}
+                              </Badge>
+                            </button>
+                            <button
+                              onClick={() => completeTripSheet(t._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to complete trip sheet'))}
+                              disabled={t.status === 'Complete'}
+                              title={t.status === 'Complete' ? 'Trip already completed' : 'Mark trip sheet as completed'}
+                              className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </button>
+                          </div>
                           <AnimatePresence initial={false}>
                             {expandedTrip === t._id ? (
                               <motion.div
@@ -1383,6 +1472,12 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {pageLoading && activeTab === 'approvals' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={5} />
+            </div>
+          ) : null}
+
           {!pageLoading && activeTab === 'approvals' ? (
             <div className="space-y-4">
               <div className="card p-5">
@@ -1422,14 +1517,11 @@ export default function LogisticsApp() {
                         </div>
                       </div>
 
-                      <div className="grid gap-2 border-t border-slate-200 bg-white px-4 py-3 text-xs text-slate-600 sm:grid-cols-3 lg:grid-cols-6">
-                        <div>Total Cash: <span className="font-semibold text-slate-900">{formatMoney(group.totals.cash)}</span></div>
-                        <div>Total UPI: <span className="font-semibold text-slate-900">{formatMoney(group.totals.upi)}</span></div>
-                        <div>Total Cheque: <span className="font-semibold text-slate-900">{formatMoney(group.totals.cheque)}</span></div>
-                        <div>Total Credit Notes: <span className="font-semibold text-slate-900">{formatMoney(group.totals.creditNote)}</span></div>
-                        <div>Total Received: <span className="font-semibold text-slate-900">{formatMoney(group.totals.received)}</span></div>
-                        <div>Total Actual: <span className="font-semibold text-slate-900">{formatMoney(group.totals.actual)}</span></div>
-                        <div>Delivered Shops: <span className="font-semibold text-slate-900">{group.deliveredCount}/{group.rows.length}</span></div>
+                      <div className="grid gap-2 border-t border-slate-200 bg-white px-4 py-3 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+                        <div>Total Cash Received: <span className="font-semibold text-slate-900">{formatMoney(group.totals.cash)}</span></div>
+                        <div>Total UPI Received: <span className="font-semibold text-slate-900">{formatMoney(group.totals.upi)}</span></div>
+                        <div>Total Cheque Received: <span className="font-semibold text-slate-900">{formatMoney(group.totals.cheque)}</span></div>
+                        <div>Delivered Status: <span className="font-semibold text-slate-900">{group.deliveredCount}/{group.rows.length} Delivered</span></div>
                       </div>
 
                       {expandedApprovalGroups.includes(group.key) ? (
@@ -1442,6 +1534,8 @@ export default function LogisticsApp() {
                                 <th className="px-3 py-2 text-left">Actual</th>
                                 <th className="px-3 py-2 text-left">Received</th>
                                 <th className="px-3 py-2 text-left">Payment Mode</th>
+                                <th className="px-3 py-2 text-left">Deduction Total</th>
+                                <th className="px-3 py-2 text-left">Deductions</th>
                                 <th className="px-3 py-2 text-left">Status</th>
                                 <th className="px-3 py-2 text-left">Action</th>
                               </tr>
@@ -1454,6 +1548,14 @@ export default function LogisticsApp() {
                                   <td className="px-3 py-2">{formatMoney(Number(approval.payload?.totalAmount || 0))}</td>
                                   <td className="px-3 py-2">{formatMoney(Number(approval.payload?.amount || 0))}</td>
                                   <td className="px-3 py-2 uppercase">{approval.payload.mode || '-'}</td>
+                                  <td className="px-3 py-2">{formatMoney(Number(approval.payload?.deductedAmount || 0))}</td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {Array.isArray(approval.payload?.deductions) && approval.payload.deductions.length
+                                      ? approval.payload.deductions
+                                          .map((ded: any) => `${ded.typeLabel || ded.type || 'deduction'}: ${formatMoney(Number(ded.amount || 0))}`)
+                                          .join(', ')
+                                      : '-'}
+                                  </td>
                                   <td className="px-3 py-2">{approval.status}</td>
                                   <td className="px-3 py-2">
                                     <div className="flex gap-1">
@@ -1486,11 +1588,68 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {pageLoading && activeTab === 'cheques' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={5} />
+            </div>
+          ) : null}
+
           {!pageLoading && activeTab === 'cheques' ? (
             <div className="card overflow-hidden">
               <div className="border-b border-slate-200 px-5 py-4">
                 <h3 className="text-sm font-semibold text-slate-900">Cheques</h3>
                 <p className="mt-1 text-xs text-slate-500">Track cheque lifecycle and reconcile invoice balances.</p>
+              </div>
+
+              <div className="grid gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 md:grid-cols-6">
+                <input
+                  value={manualChequeForm.invoiceNumber}
+                  onChange={(e) => setManualChequeForm((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
+                  placeholder="Invoice Number"
+                  list="invoice-number-options"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <datalist id="invoice-number-options">
+                  {invoiceRows.map((row) => (
+                    <option key={row._id} value={row.invoiceNumber} />
+                  ))}
+                </datalist>
+                <input
+                  value={manualChequeForm.chequeNumber}
+                  onChange={(e) => setManualChequeForm((prev) => ({ ...prev, chequeNumber: e.target.value }))}
+                  placeholder="Cheque Number"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  type="date"
+                  value={manualChequeForm.date}
+                  onChange={(e) => setManualChequeForm((prev) => ({ ...prev, date: e.target.value }))}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  value={manualChequeForm.bankName}
+                  onChange={(e) => setManualChequeForm((prev) => ({ ...prev, bankName: e.target.value }))}
+                  placeholder="Bank Name"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  type="number"
+                  value={manualChequeForm.amount}
+                  onChange={(e) => setManualChequeForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  placeholder="Cheque Amount"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  value={manualChequeForm.action}
+                  disabled
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
+                />
+                <button
+                  onClick={() => createManualCheque().catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to create cheque'))}
+                  className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+                >
+                  Add Cheque Entry
+                </button>
               </div>
 
               <div className="grid gap-2 border-b border-slate-200 px-5 py-3 md:grid-cols-5">
@@ -1580,11 +1739,52 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {pageLoading && activeTab === 'expenses' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={4} />
+            </div>
+          ) : null}
+
           {!pageLoading && activeTab === 'expenses' ? (
             <div className="card overflow-hidden">
               <div className="border-b border-slate-200 px-5 py-4">
                 <h3 className="text-sm font-semibold text-slate-900">Expenses</h3>
                 <p className="mt-1 text-xs text-slate-500">Add and review expense records.</p>
+              </div>
+
+              <div className="border-b border-slate-200 px-5 py-4">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending Driver Expense Approvals</h4>
+                <div className="mt-3 space-y-2">
+                  {expenseApprovals.map((approval) => (
+                    <div key={approval._id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium text-slate-900">
+                          {approval.payload?.type || approval.payload?.category || 'Expense'}
+                        </p>
+                        <p className="text-slate-700">{formatMoney(Number(approval.payload?.amount || 0))}</p>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {approval.payload?.date || '-'} · {approval.payload?.addedBy || 'Driver'}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">{approval.payload?.note || approval.payload?.notes || '-'}</p>
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          onClick={() => approveItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve'))}
+                          className="rounded border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => rejectItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to reject'))}
+                          className="rounded border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {!expenseApprovals.length ? <p className="text-sm text-slate-500">No pending driver expenses.</p> : null}
+                </div>
               </div>
 
               <div className="grid gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 md:grid-cols-5">

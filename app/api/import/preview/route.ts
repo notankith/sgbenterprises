@@ -36,6 +36,68 @@ function findColumnIndex(headers: string[], aliases: readonly string[]) {
   return headers.findIndex((h) => aliases.includes(h));
 }
 
+function toIsoDate(year: number, month: number, day: number) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  const mm = String(m).padStart(2, '0');
+  const dd = String(d).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
+function normalizeImportDate(value: unknown, importYear: number) {
+  if (value == null) return null;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return toIsoDate(parsed.y, parsed.m, parsed.d);
+    }
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return toIsoDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
+  }
+
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  const dm = text.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (dm) {
+    // dd/mm format: dm[1]=day, dm[2]=month
+    return toIsoDate(importYear, Number(dm[2]), Number(dm[1]));
+  }
+
+  const dmy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (dmy) {
+    const yearRaw = dmy[3];
+    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+    return toIsoDate(year, Number(dmy[2]), Number(dmy[1]));
+  }
+
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    return toIsoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+  }
+
+  const parsedDate = new Date(text);
+  if (!Number.isNaN(parsedDate.getTime())) {
+    return toIsoDate(parsedDate.getFullYear(), parsedDate.getMonth() + 1, parsedDate.getDate());
+  }
+
+  return null;
+}
+
 function isTotalFooterRow(firm: string, invoiceNumber: string, shopName: string, route: string, date: string) {
   const normalizedFirm = firm.toLowerCase().trim();
   const normalizedInvoice = invoiceNumber.toLowerCase().trim();
@@ -66,7 +128,12 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const wb = XLSX.read(bytes, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const matrix = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' }) as any[][];
+    const matrix = XLSX.utils.sheet_to_json<any[]>(ws, {
+      header: 1,
+      defval: '',
+      raw: false,
+      dateNF: 'dd/mm/yyyy',
+    }) as any[][];
 
     const headerRowIndex = detectHeaderRow(matrix);
     if (headerRowIndex === -1) {
@@ -95,15 +162,18 @@ export async function POST(req: NextRequest) {
     const dataRows = matrix.slice(headerRowIndex + 1).filter((r) => r.some((v) => String(v || '').trim() !== ''));
 
     let ignoredTotalRows = 0;
+    const importYear = new Date().getFullYear();
     const normalized = dataRows
       .map((r, idx) => {
         const firm = String(r[firmIdx] || '').trim().toUpperCase();
         const invoiceNumber = String(r[invoiceIdx] || '').trim();
         const route = String(r[routeIdx] || '').trim();
         const shopName = String(r[shopIdx] || '').trim();
-        const date = String(r[dateIdx] || '').trim();
+        const dateRaw = r[dateIdx];
+        const dateText = String(dateRaw || '').trim();
+        const date = normalizeImportDate(dateRaw, importYear);
 
-        if (isTotalFooterRow(firm, invoiceNumber, shopName, route, date)) {
+        if (isTotalFooterRow(firm, invoiceNumber, shopName, route, dateText)) {
           ignoredTotalRows += 1;
           return null;
         }
@@ -115,7 +185,11 @@ export async function POST(req: NextRequest) {
         if (!invoiceNumber) errors.push({ field: 'invoiceNumber', message: 'Missing invoice number' });
         if (!route) errors.push({ field: 'route', message: 'Missing route' });
         if (!shopName) errors.push({ field: 'shopName', message: 'Missing shop name' });
-        if (!date) errors.push({ field: 'date', message: 'Missing date' });
+        if (!dateText) {
+          errors.push({ field: 'date', message: 'Missing date' });
+        } else if (!date) {
+          errors.push({ field: 'date', message: 'Invalid date format. Use dd/mm, dd/mm/yyyy, or dd/mm/yy' });
+        }
         if (Number.isNaN(totalAmount) || totalAmount <= 0) {
           errors.push({ field: 'totalAmount', message: 'Invalid amount' });
         }
@@ -126,7 +200,7 @@ export async function POST(req: NextRequest) {
           invoiceNumber,
           route,
           shopName,
-          date,
+          date: date || dateText,
           totalAmount: Number.isNaN(totalAmount) ? 0 : totalAmount,
           hasError: errors.length > 0,
           errors,

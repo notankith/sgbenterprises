@@ -2,6 +2,55 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
+function parseInvoiceDateValue(value: unknown) {
+  if (value == null) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.getTime();
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  }
+
+  const dmy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (dmy) {
+    const yearRaw = dmy[3];
+    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+    return Date.UTC(year, Number(dmy[2]) - 1, Number(dmy[1]));
+  }
+
+  const dm = text.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (dm) {
+    return Date.UTC(new Date().getFullYear(), Number(dm[2]) - 1, Number(dm[1]));
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.getTime();
+  }
+
+  return null;
+}
+
+function parseDateInput(value: string, endOfDay = false) {
+  const match = String(value || '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!match) return null;
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    endOfDay ? 23 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 999 : 0,
+  );
+}
+
 export async function GET(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -19,6 +68,8 @@ export async function GET(req: NextRequest) {
     const route = String(searchParams.get('route') || '').trim();
     const paymentStatus = searchParams.get('paymentStatus');
     const deliveryStatus = searchParams.get('deliveryStatus');
+    const sortBy = String(searchParams.get('sortBy') || 'date').trim();
+    const sortDirection = String(searchParams.get('sortDirection') || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
     const page = Number(searchParams.get('page') || '1');
     const pageSize = Number(searchParams.get('pageSize') || '20');
 
@@ -59,16 +110,6 @@ export async function GET(req: NextRequest) {
       ];
     }
 
-    if (dateFrom || dateTo) {
-      if (dateFrom && dateTo) {
-        filter.date = { $gte: dateFrom, $lte: dateTo };
-      } else if (dateFrom) {
-        filter.date = { $gte: dateFrom };
-      } else {
-        filter.date = { $lte: dateTo };
-      }
-    }
-
     if (amountMin || amountMax) {
       filter.totalAmount = {};
       const min = Number(amountMin);
@@ -83,19 +124,45 @@ export async function GET(req: NextRequest) {
     if (paymentStatus) filter.paymentStatus = paymentStatus;
     if (deliveryStatus) filter.deliveryStatus = deliveryStatus;
     if (firm) filter.firm = firm;
-    if (route) filter.route = { $regex: route, $options: 'i' };
+    if (route) filter.route = route;
 
-    const total = await db.collection('invoices').countDocuments(filter);
-    const rows = await db
-      .collection('invoices')
-      .find(filter)
-      .sort({ date: -1 })
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
-      .toArray();
+    let rows = await db.collection('invoices').find(filter).toArray();
+
+    const dateFromMs = dateFrom ? parseDateInput(dateFrom, false) : null;
+    const dateToMs = dateTo ? parseDateInput(dateTo, true) : null;
+    if (dateFromMs !== null || dateToMs !== null) {
+      rows = rows.filter((row) => {
+        const rowDate = parseInvoiceDateValue(row.date);
+        if (rowDate === null) return false;
+        if (dateFromMs !== null && rowDate < dateFromMs) return false;
+        if (dateToMs !== null && rowDate > dateToMs) return false;
+        return true;
+      });
+    }
+
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    rows.sort((left, right) => {
+      const leftValue = sortBy === 'date'
+        ? parseInvoiceDateValue(left.date) ?? parseInvoiceDateValue(left.createdAt) ?? 0
+        : sortBy === 'totalAmount'
+          ? Number(left.totalAmount || 0)
+          : String(left[sortBy] ?? '').toLowerCase();
+      const rightValue = sortBy === 'date'
+        ? parseInvoiceDateValue(right.date) ?? parseInvoiceDateValue(right.createdAt) ?? 0
+        : sortBy === 'totalAmount'
+          ? Number(right.totalAmount || 0)
+          : String(right[sortBy] ?? '').toLowerCase();
+
+      if (leftValue < rightValue) return -1 * direction;
+      if (leftValue > rightValue) return 1 * direction;
+      return String(left.invoiceNumber || '').localeCompare(String(right.invoiceNumber || ''), 'en', { numeric: true });
+    });
+
+    const total = rows.length;
+    const pagedRows = rows.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
 
     return NextResponse.json({
-      rows: rows.map((r) => ({ ...r, _id: r._id.toString() })),
+      rows: pagedRows.map((r) => ({ ...r, _id: r._id.toString() })),
       total,
       page,
       pageSize,

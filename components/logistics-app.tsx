@@ -7,7 +7,6 @@ import {
   SortingState,
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -192,13 +191,30 @@ function formatDateTime(value?: string) {
 
 function formatDateOnly(value?: string) {
   if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  }).format(date);
+  const text = String(value).trim();
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const dd = String(Number(isoMatch[3])).padStart(2, '0');
+    const mm = String(Number(isoMatch[2])).padStart(2, '0');
+    const yyyy = String(Number(isoMatch[1]));
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  const dmyMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (dmyMatch) {
+    const dd = String(Number(dmyMatch[1])).padStart(2, '0');
+    const mm = String(Number(dmyMatch[2])).padStart(2, '0');
+    const yearRaw = dmyMatch[3];
+    const yyyy = yearRaw.length === 2 ? String(2000 + Number(yearRaw)) : String(Number(yearRaw));
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(date.getFullYear());
+  return `${dd}/${mm}/${yyyy}`;
 }
 
 function statusBadgeClass(status: string) {
@@ -243,6 +259,7 @@ export default function LogisticsApp() {
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceTotal, setInvoiceTotal] = useState(0);
   const [invoicePage, setInvoicePage] = useState(1);
+  const [invoiceSorting, setInvoiceSorting] = useState<SortingState>([{ id: 'date', desc: true }]);
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
   const [activeInvoiceFilter, setActiveInvoiceFilter] = useState<InvoiceFilterKey | null>(null);
   const [invoiceFilters, setInvoiceFilters] = useState<InvoiceFilters>({
@@ -348,7 +365,7 @@ export default function LogisticsApp() {
   const [resetLoading, setResetLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
 
-  const pageSize = 20;
+  const pageSize = 50;
   const invoicePages = useMemo(() => Math.max(1, Math.ceil(invoiceTotal / pageSize)), [invoiceTotal]);
   const pageTitle = tabs.find((t) => t.key === activeTab)?.label || 'Dashboard';
   const filteredPendingPool = useMemo(() => {
@@ -502,12 +519,17 @@ export default function LogisticsApp() {
     }
   }
 
-  async function loadInvoices(page = invoicePage) {
+  async function loadInvoices(page = invoicePage, sorting = invoiceSorting) {
     setInvoiceLoading(true);
     try {
+      const sortEntry = sorting[0];
+      const sortBy = sortEntry?.id || 'date';
+      const sortDirection = sortEntry?.desc === false ? 'asc' : 'desc';
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
+        sortBy,
+        sortDirection,
         invoiceNumber: debouncedInvoiceNumber,
         shopName: debouncedShopName,
         dateFrom: invoiceFilters.dateFrom,
@@ -653,6 +675,7 @@ export default function LogisticsApp() {
     invoiceFilters.paymentStatus,
     invoiceFilters.firm,
     invoiceFilters.route,
+    invoiceSorting,
   ]);
 
   useEffect(() => {
@@ -1154,6 +1177,10 @@ export default function LogisticsApp() {
             <InvoiceTable
               rows={invoiceRows}
               loading={invoiceLoading}
+              sorting={invoiceSorting}
+              setSorting={setInvoiceSorting}
+              firmOptions={filterOptions.firms}
+              routeOptions={filterOptions.routes}
               filters={invoiceFilters}
               setFilters={setInvoiceFilters}
               activeFilter={activeInvoiceFilter}
@@ -2189,6 +2216,10 @@ export default function LogisticsApp() {
 function InvoiceTable({
   rows,
   loading,
+  sorting,
+  setSorting,
+  firmOptions,
+  routeOptions,
   filters,
   setFilters,
   activeFilter,
@@ -2205,6 +2236,10 @@ function InvoiceTable({
 }: {
   rows: InvoiceRow[];
   loading: boolean;
+  sorting: SortingState;
+  setSorting: React.Dispatch<React.SetStateAction<SortingState>>;
+  firmOptions: string[];
+  routeOptions: string[];
   filters: InvoiceFilters;
   setFilters: React.Dispatch<React.SetStateAction<InvoiceFilters>>;
   activeFilter: InvoiceFilterKey | null;
@@ -2219,7 +2254,6 @@ function InvoiceTable({
   onAddPayment: (invoice: InvoiceRow) => void;
   onAddNote: (invoice: InvoiceRow) => void;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([]);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
 
   const columns = useMemo<ColumnDef<InvoiceRow>[]>(
@@ -2233,6 +2267,7 @@ function InvoiceTable({
         accessorKey: 'date',
         header: 'Date',
         meta: { filter: 'date' },
+        cell: (info) => formatDateOnly(String(info.getValue() || '')),
       },
       {
         accessorKey: 'shopName',
@@ -2280,7 +2315,7 @@ function InvoiceTable({
     onSortingChange: setSorting,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    manualSorting: true,
     enableColumnResizing: true,
     columnResizeMode: 'onChange',
   });
@@ -2309,6 +2344,8 @@ function InvoiceTable({
                             setActiveFilter={setActiveFilter}
                             filters={filters}
                             setFilters={setFilters}
+                            firmOptions={firmOptions}
+                            routeOptions={routeOptions}
                             isFiltered={(() => {
                               const key = (header.column.columnDef.meta as { filter: InvoiceFilterKey } | undefined)?.filter;
                               if (!key) return false;
@@ -2553,6 +2590,8 @@ function InvoiceHeader({
   setActiveFilter,
   filters,
   setFilters,
+  firmOptions,
+  routeOptions,
   isFiltered,
   sortState,
   onSort,
@@ -2564,6 +2603,8 @@ function InvoiceHeader({
   setActiveFilter: React.Dispatch<React.SetStateAction<InvoiceFilterKey | null>>;
   filters: InvoiceFilters;
   setFilters: React.Dispatch<React.SetStateAction<InvoiceFilters>>;
+  firmOptions: string[];
+  routeOptions: string[];
   isFiltered: boolean;
   sortState: false | 'asc' | 'desc';
   onSort?: (event: unknown) => void;
@@ -2599,22 +2640,30 @@ function InvoiceHeader({
             />
           ) : null}
           {filterKey === 'firm' ? (
-            <input
+            <select
               value={filters.firm}
-              onChange={(e) => setFilterValue({ firm: e.target.value.toUpperCase() })}
-              placeholder="Firm"
+              onChange={(e) => setFilterValue({ firm: e.target.value })}
               className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
               autoFocus
-            />
+            >
+              <option value="">All Firms</option>
+              {firmOptions.map((firm) => (
+                <option key={firm} value={firm}>{firm}</option>
+              ))}
+            </select>
           ) : null}
           {filterKey === 'route' ? (
-            <input
+            <select
               value={filters.route}
               onChange={(e) => setFilterValue({ route: e.target.value })}
-              placeholder="Route"
               className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
               autoFocus
-            />
+            >
+              <option value="">All Routes</option>
+              {routeOptions.map((route) => (
+                <option key={route} value={route}>{route}</option>
+              ))}
+            </select>
           ) : null}
           {filterKey === 'date' ? (
             <div className="flex items-center gap-1">

@@ -12,10 +12,9 @@ const transitions: Record<ChequeStatus, ChequeStatus[]> = {
   bounced: [],
 };
 
-function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'paid' | 'payable' {
-  const balance = Number(totalAmount || 0) - Number(amountPaid || 0);
-  if (balance < 0) return 'payable';
-  if (balance === 0) return 'paid';
+function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'partial' | 'paid' {
+  if (totalAmount > 0 && amountPaid >= totalAmount) return 'paid';
+  if (amountPaid > 0) return 'partial';
   return 'unpaid';
 }
 
@@ -83,7 +82,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
       if (delta !== 0) {
         const currentPaid = Number(invoice.paidAmount || 0);
-        const nextPaid = currentPaid + delta;
+        const nextPaid = Math.max(0, currentPaid + delta);
         const total = Number(invoice.totalAmount || 0);
 
         await db.collection('invoices').updateOne(

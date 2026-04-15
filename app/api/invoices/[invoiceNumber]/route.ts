@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
@@ -29,29 +28,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ in
   }
 
   if (body.deliveryStatus) {
-    const current = await db.collection('invoices').findOne(
-      { invoiceNumber },
-      { projection: { deliveryPerson: 1, assignedAgentId: 1 } },
-    );
-
-    const update: Record<string, any> = { deliveryStatus: body.deliveryStatus };
-    const explicitDeliveryPerson = String(body.deliveryPerson || '').trim();
-    const existingDeliveryPerson = String(current?.deliveryPerson || '').trim();
-    let resolvedDeliveryPerson = explicitDeliveryPerson || existingDeliveryPerson;
-
-    const candidateAgentId = agentId || String(current?.assignedAgentId || '').trim();
-    if (body.deliveryStatus === 'delivered' && !resolvedDeliveryPerson && ObjectId.isValid(candidateAgentId)) {
-      const agent = await db.collection('delivery_agents').findOne(
-        { _id: new ObjectId(candidateAgentId) },
-        { projection: { name: 1 } },
-      );
-      if (agent?.name) resolvedDeliveryPerson = String(agent.name).trim();
-    }
-
-    if (resolvedDeliveryPerson) {
-      update.deliveryPerson = resolvedDeliveryPerson;
-    }
-
+    const update: Record<string, any> = {
+      deliveryStatus: body.deliveryStatus,
+      deliveryPerson: body.deliveryPerson || null,
+    };
     if (body.deliveryStatus === 'delivered') {
       update.deliveredAt = new Date().toISOString();
     }

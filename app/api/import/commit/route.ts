@@ -81,6 +81,8 @@ export async function POST(req: NextRequest) {
         notes: [],
         archived: false,
         paymentHistory: [],
+        deductions: [],
+        deductedAmount: 0,
         createdAt: new Date().toISOString(),
       }))
       .filter((r) => r.firm && r.invoiceNumber && r.date && r.route && r.shopName && Number.isFinite(r.totalAmount) && r.totalAmount !== 0);

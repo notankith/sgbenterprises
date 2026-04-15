@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Create expense as pending approval
+// Create expense directly from admin
 export async function POST(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -41,38 +41,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'date, category, and valid amount are required' }, { status: 400 });
     }
 
-    if (body.direct) {
-      await db.collection('expenses').insertOne({
-        date,
-        amount,
-        category,
-        addedBy: paidBy || 'Admin',
-        status: 'approved',
-        approvedAt: now,
-        createdAt: now,
-      });
-      return NextResponse.json({ success: true });
-    }
-
-    const approval = {
-      type: 'expense',
-      status: 'pending',
+    await db.collection('expenses').insertOne({
+      date,
+      amount,
+      category,
+      addedBy: paidBy || 'Admin',
+      notes: String(body.notes || '').trim(),
+      status: 'approved',
+      approvedAt: now,
       createdAt: now,
-      payload: {
-        date,
-        amount,
-        category,
-        addedBy: paidBy || 'Admin',
-        agentId: body.agentId || undefined,
-        type: body.type || category || 'Other',
-        createdAt: now,
-      },
-    };
-    await db.collection('approvals').insertOne(approval);
+    });
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(
-      { error: 'Internal server error while creating expense approval.' },
+      { error: 'Internal server error while creating expense.' },
       { status: 500 },
     );
   }

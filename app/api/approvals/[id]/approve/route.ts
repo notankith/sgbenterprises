@@ -3,10 +3,9 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
-function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'paid' | 'payable' {
-  const balance = Number(totalAmount || 0) - Number(amountPaid || 0);
-  if (balance < 0) return 'payable';
-  if (balance === 0) return 'paid';
+function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'partial' | 'paid' {
+  if (totalAmount > 0 && amountPaid >= totalAmount) return 'paid';
+  if (amountPaid > 0) return 'partial';
   return 'unpaid';
 }
 
@@ -48,6 +47,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         chequeNumber: payload.chequeNumber ? String(payload.chequeNumber) : null,
         bankName: payload.bankName ? String(payload.bankName) : null,
         chequeStatus: payload.mode === 'cheque' ? 'pending' : null,
+        proofImageUrl: payload.proofImageUrl ? String(payload.proofImageUrl) : null,
+        proofImageKey: payload.proofImageKey ? String(payload.proofImageKey) : null,
         createdAt: now,
         approvedAt: now,
       };
@@ -72,6 +73,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           chequeNumber: paymentRecord.chequeNumber,
           bankName: paymentRecord.bankName,
           chequeStatus: paymentRecord.chequeStatus,
+          proofImageUrl: paymentRecord.proofImageUrl,
+          proofImageKey: paymentRecord.proofImageKey,
           approvedAt: now,
           source: 'approval',
         };

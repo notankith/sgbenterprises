@@ -13,6 +13,8 @@ export type Invoice = {
   deliveryPerson?: string;
   archived: boolean;
   notes: { text: string; timestamp: string }[];
+  deductions?: { type: string; typeLabel?: string; amount: number; createdAt?: string }[];
+  deductedAmount?: number;
   assignedTripId?: string;
 };
 
@@ -30,6 +32,8 @@ export type Payment = {
   chequeNumber?: string | null;
   bankName?: string | null;
   chequeStatus?: 'pending' | 'deposited' | 'cleared' | 'bounced' | null;
+  proofImageUrl?: string | null;
+  proofImageKey?: string | null;
 };
 
 export type Expense = {
@@ -44,7 +48,7 @@ export type Expense = {
 
 export type Approval = {
   _id?: string;
-  type: 'payment' | 'expense';
+  type: 'payment' | 'expense' | 'deduction';
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   approvedAt?: string;

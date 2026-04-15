@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
       ? await db
           .collection('invoices')
           .find(invoiceFilter)
-          .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, paidAmount: 1, paymentStatus: 1, deliveryStatus: 1, date: 1, firm: 1, route: 1 })
+            .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, paidAmount: 1, deductedAmount: 1, paymentStatus: 1, deliveryStatus: 1, date: 1, firm: 1, route: 1 })
           .toArray()
       : [];
 
@@ -96,6 +96,7 @@ export async function GET(req: NextRequest) {
             shopName: inv.shopName || '-',
             totalAmount: Number(inv.totalAmount || 0),
             paidAmount: Number(inv.paidAmount || 0),
+            deductedAmount: Number(inv.deductedAmount || 0),
             paymentStatus: String(inv.paymentStatus || 'unpaid'),
             deliveryStatus: inv.deliveryStatus || 'pending',
             date: String(inv.date || ''),
@@ -103,7 +104,7 @@ export async function GET(req: NextRequest) {
             route: String(inv.route || ''),
           };
         })
-        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; paidAmount: number; paymentStatus: string; deliveryStatus: string; date: string; firm: string; route: string }>;
+        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; paidAmount: number; deductedAmount: number; paymentStatus: string; deliveryStatus: string; date: string; firm: string; route: string }>;
 
       const totalAmount = details.reduce((sum, d) => sum + Number(d.totalAmount || 0), 0);
       const settledAndDelivered = details.length > 0 && details.every((d) => d.deliveryStatus === 'delivered' && (d.paymentStatus === 'paid' || Number(d.paidAmount || 0) >= Number(d.totalAmount || 0)));

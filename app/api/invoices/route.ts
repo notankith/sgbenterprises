@@ -24,6 +24,13 @@ function parseInvoiceDateValue(value: unknown) {
     return Date.UTC(year, Number(dmy[2]) - 1, Number(dmy[1]));
   }
 
+  const dmyDash = text.match(/^(\d{1,2})-(\d{1,2})-(\d{2}|\d{4})$/);
+  if (dmyDash) {
+    const yearRaw = dmyDash[3];
+    const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
+    return Date.UTC(year, Number(dmyDash[2]) - 1, Number(dmyDash[1]));
+  }
+
   const dm = text.match(/^(\d{1,2})\/(\d{1,2})$/);
   if (dm) {
     return Date.UTC(new Date().getFullYear(), Number(dm[2]) - 1, Number(dm[1]));
@@ -64,6 +71,7 @@ export async function GET(req: NextRequest) {
     const dateTo = searchParams.get('dateTo') || '';
     const amountMin = searchParams.get('amountMin') || '';
     const amountMax = searchParams.get('amountMax') || '';
+    const cmpCode = String(searchParams.get('cmpCode') || '').trim().toUpperCase();
     const firm = String(searchParams.get('firm') || '').trim().toUpperCase();
     const route = String(searchParams.get('route') || '').trim();
     const paymentStatus = searchParams.get('paymentStatus');
@@ -76,7 +84,7 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
 
     if (meta === 'filters') {
-      const [firms, routes] = await Promise.all([
+      const [firms, routes, cmpCodesFromCmpCode, cmpCodesFromFirm] = await Promise.all([
         db.collection('invoices').distinct('firm', {
           archived: { $ne: true },
           firm: { $exists: true, $nin: [null, ''] },
@@ -85,9 +93,26 @@ export async function GET(req: NextRequest) {
           archived: { $ne: true },
           route: { $exists: true, $nin: [null, ''] },
         }),
+        db.collection('invoices').distinct('cmpCode', {
+          archived: { $ne: true },
+          cmpCode: { $exists: true, $nin: [null, ''] },
+        }),
+        db.collection('invoices').distinct('firm', {
+          archived: { $ne: true },
+          firm: { $exists: true, $nin: [null, ''] },
+        }),
       ]);
 
+      const cmpCodes = Array.from(
+        new Set(
+          [...cmpCodesFromCmpCode, ...cmpCodesFromFirm]
+            .map((x) => String(x || '').trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ).sort((a, b) => a.localeCompare(b));
+
       return NextResponse.json({
+        cmpCodes,
         firms: firms.map((x) => String(x)).filter(Boolean).sort((a, b) => a.localeCompare(b)),
         routes: routes.map((x) => String(x)).filter(Boolean).sort((a, b) => a.localeCompare(b)),
       });
@@ -123,7 +148,16 @@ export async function GET(req: NextRequest) {
 
     if (paymentStatus) filter.paymentStatus = paymentStatus;
     if (deliveryStatus) filter.deliveryStatus = deliveryStatus;
-    if (firm) filter.firm = firm;
+    if (cmpCode) {
+      filter.$and = [
+        ...(Array.isArray(filter.$and) ? filter.$and : []),
+        {
+          $or: [{ cmpCode }, { firm: cmpCode }],
+        },
+      ];
+    } else if (firm) {
+      filter.firm = firm;
+    }
     if (route) filter.route = route;
 
     let rows = await db.collection('invoices').find(filter).toArray();
@@ -146,11 +180,15 @@ export async function GET(req: NextRequest) {
         ? parseInvoiceDateValue(left.date) ?? parseInvoiceDateValue(left.createdAt) ?? 0
         : sortBy === 'totalAmount'
           ? Number(left.totalAmount || 0)
+          : sortBy === 'cmpCode'
+            ? String(left.cmpCode ?? left.firm ?? '').toLowerCase()
           : String(left[sortBy] ?? '').toLowerCase();
       const rightValue = sortBy === 'date'
         ? parseInvoiceDateValue(right.date) ?? parseInvoiceDateValue(right.createdAt) ?? 0
         : sortBy === 'totalAmount'
           ? Number(right.totalAmount || 0)
+          : sortBy === 'cmpCode'
+            ? String(right.cmpCode ?? right.firm ?? '').toLowerCase()
           : String(right[sortBy] ?? '').toLowerCase();
 
       if (leftValue < rightValue) return -1 * direction;
@@ -162,7 +200,11 @@ export async function GET(req: NextRequest) {
     const pagedRows = rows.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
 
     return NextResponse.json({
-      rows: pagedRows.map((r) => ({ ...r, _id: r._id.toString() })),
+      rows: pagedRows.map((r) => ({
+        ...r,
+        cmpCode: String(r.cmpCode || r.firm || '').trim().toUpperCase(),
+        _id: r._id.toString(),
+      })),
       total,
       page,
       pageSize,
@@ -182,13 +224,18 @@ export async function PATCH(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await req.json();
-    const { invoiceNumber, totalAmount, archive, firm, route } = body;
+    const { invoiceNumber, totalAmount, archive, cmpCode, firm, route } = body;
     if (!invoiceNumber) return NextResponse.json({ error: 'invoiceNumber is required' }, { status: 400 });
 
     const db = await getDb();
     const updates: Record<string, any> = {};
     if (typeof totalAmount === 'number') updates.totalAmount = totalAmount;
     if (typeof archive === 'boolean') updates.archived = archive;
+    if (typeof cmpCode === 'string') {
+      const normalizedCmpCode = cmpCode.trim().toUpperCase();
+      updates.cmpCode = normalizedCmpCode;
+      updates.firm = normalizedCmpCode;
+    }
     if (typeof firm === 'string') updates.firm = firm.trim().toUpperCase();
     if (typeof route === 'string') updates.route = route.trim();
 

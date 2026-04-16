@@ -7,13 +7,14 @@ export async function GET(req: NextRequest) {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const firm = String(req.nextUrl.searchParams.get('firm') || '').trim().toUpperCase();
+    const cmpCode = String(req.nextUrl.searchParams.get('cmpCode') || firm || '').trim().toUpperCase();
     const route = String(req.nextUrl.searchParams.get('route') || '').trim();
 
     const invoiceFilter: Record<string, any> = { archived: { $ne: true } };
     const expenseFilter: Record<string, any> = {};
-    if (firm) {
-      invoiceFilter.firm = firm;
-      expenseFilter.firm = firm;
+    if (cmpCode) {
+      invoiceFilter.$or = [{ cmpCode }, { firm: cmpCode }];
+      expenseFilter.$or = [{ cmpCode }, { firm: cmpCode }];
     }
     if (route) {
       invoiceFilter.route = { $regex: route, $options: 'i' };
@@ -21,9 +22,27 @@ export async function GET(req: NextRequest) {
     }
 
     const db = await getDb();
-    const invoices = await db.collection('invoices').find(invoiceFilter).toArray();
-    const expenses = await db.collection('expenses').find(expenseFilter).toArray();
-    const trips = await db.collection('trip_sheets').find({}).toArray();
+    const [invoices, expenses, trips, cmpCodesFromCmpCode, cmpCodesFromFirm] = await Promise.all([
+      db.collection('invoices').find(invoiceFilter).toArray(),
+      db.collection('expenses').find(expenseFilter).toArray(),
+      db.collection('trip_sheets').find({}).toArray(),
+      db.collection('invoices').distinct('cmpCode', {
+        archived: { $ne: true },
+        cmpCode: { $exists: true, $nin: [null, ''] },
+      }),
+      db.collection('invoices').distinct('firm', {
+        archived: { $ne: true },
+        firm: { $exists: true, $nin: [null, ''] },
+      }),
+    ]);
+
+    const availableCmpCodes = Array.from(
+      new Set(
+        [...cmpCodesFromCmpCode, ...cmpCodesFromFirm]
+          .map((x) => String(x || '').trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
 
   const totalInvoices = invoices.length;
   const paid = invoices.filter((x) => x.paymentStatus === 'paid').length;
@@ -84,6 +103,7 @@ export async function GET(req: NextRequest) {
       tripSheets: trips.length,
       driverPerformance,
       problemZone,
+      availableCmpCodes,
       trend: Object.entries(trendByMonth)
         .map(([month, v]) => ({ month, ...v }))
         .sort((a, b) => a.month.localeCompare(b.month)),

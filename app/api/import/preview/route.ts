@@ -4,14 +4,54 @@ import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
 const headerAliases = {
-  invoiceNumber: ['invoice no', 'invoice number', 'invoice', 'invoice #', 'invoice id'],
-  shopName: ['party name', 'shop name', 'customer name', 'party', 'shop'],
-  amount: ['total amount', 'amount', 'invoice amount', 'total'],
-  date: ['date', 'invoice date', 'billing date'],
+  invoiceNumber: ['invoice no', 'invoice number', 'invoice', 'invoice #', 'invoice id', 'bill no', 'bill number'],
+  shopName: ['party name', 'shop name', 'customer name', 'party', 'shop', 'retailer name', 'retailer'],
+  amount: ['net amount', 'total amount', 'invoice amount', 'amount', 'total', 'bill amount', 'gross amount'],
+  date: ['date', 'invoice date', 'billing date', 'bill date'],
+} as const;
+
+const optionalHeaderAliases = {
+  cmpCode: ['cmpcode', 'cmp code', 'company code', 'firm code'],
+  firm: ['firm', 'company', 'cmpcode', 'cmp name', 'cmpname'],
+  route: ['route', 'beat', 'sales route'],
 } as const;
 
 function normalizeHeader(value: unknown) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function parseExcelDate(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed && Number.isInteger(parsed.y) && Number.isInteger(parsed.m) && Number.isInteger(parsed.d)) {
+      const mm = String(parsed.m).padStart(2, '0');
+      const dd = String(parsed.d).padStart(2, '0');
+      return `${parsed.y}-${mm}-${dd}`;
+    }
+  }
+
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return text;
+}
+
+function parseAmount(value: unknown) {
+  if (typeof value === 'number') return value;
+  const text = String(value || '')
+    .replace(/,/g, '')
+    .replace(/[^0-9.-]/g, '')
+    .trim();
+  if (!text) return NaN;
+  return Number(text);
 }
 
 function detectHeaderRow(rows: any[][]) {
@@ -29,15 +69,27 @@ function detectHeaderRow(rows: any[][]) {
 }
 
 function findColumnIndex(headers: string[], aliases: readonly string[]) {
-  return headers.findIndex((h) => aliases.includes(h));
+  for (const alias of aliases) {
+    const idx = headers.findIndex((h) => h === alias);
+    if (idx !== -1) return idx;
+  }
+  return -1;
 }
 
 function isTotalFooterRow(invoiceNumber: string, shopName: string, date: string) {
   const normalizedInvoice = invoiceNumber.toLowerCase().trim();
   const normalizedShop = shopName.toLowerCase().trim();
   const normalizedDate = date.toLowerCase().trim();
-  const hasTotalKeyword = /^total$/.test(normalizedInvoice) || /^total$/.test(normalizedShop);
-  return hasTotalKeyword || (!normalizedInvoice && !normalizedDate && /^total$/.test(normalizedShop));
+  const hasTotalKeyword = /^totals?$/.test(normalizedInvoice) || /^totals?$/.test(normalizedShop);
+  return hasTotalKeyword || (!normalizedInvoice && !normalizedDate && /^totals?$/.test(normalizedShop));
+}
+
+function isSummaryTotalsRow(row: any[], invoiceNumber: string, shopName: string, date: string) {
+  if (isTotalFooterRow(invoiceNumber, shopName, date)) return true;
+  const rowHeaders = row.map(normalizeHeader).filter(Boolean);
+  if (!rowHeaders.length) return false;
+  const containsTotals = rowHeaders.some((h) => h === 'total' || h === 'totals');
+  return containsTotals && !invoiceNumber.trim() && !date.trim();
 }
 
 export async function POST(req: NextRequest) {
@@ -67,6 +119,9 @@ export async function POST(req: NextRequest) {
     const shopIdx = findColumnIndex(headers, headerAliases.shopName);
     const amountIdx = findColumnIndex(headers, headerAliases.amount);
     const dateIdx = findColumnIndex(headers, headerAliases.date);
+    const cmpCodeIdx = findColumnIndex(headers, optionalHeaderAliases.cmpCode);
+    const firmIdx = findColumnIndex(headers, optionalHeaderAliases.firm);
+    const routeIdx = findColumnIndex(headers, optionalHeaderAliases.route);
 
     if ([invoiceIdx, shopIdx, amountIdx, dateIdx].some((i) => i === -1)) {
       return NextResponse.json(
@@ -82,14 +137,19 @@ export async function POST(req: NextRequest) {
       .map((r, idx) => {
         const invoiceNumber = String(r[invoiceIdx] || '').trim();
         const shopName = String(r[shopIdx] || '').trim();
-        const date = String(r[dateIdx] || '').trim();
+        const date = parseExcelDate(r[dateIdx]);
+        const cmpCode = cmpCodeIdx === -1
+          ? (firmIdx === -1 ? '' : String(r[firmIdx] || '').trim())
+          : String(r[cmpCodeIdx] || '').trim();
+        const firm = firmIdx === -1 ? cmpCode : String(r[firmIdx] || '').trim();
+        const route = routeIdx === -1 ? '' : String(r[routeIdx] || '').trim();
 
-        if (isTotalFooterRow(invoiceNumber, shopName, date)) {
+        if (isSummaryTotalsRow(r, invoiceNumber, shopName, date)) {
           ignoredTotalRows += 1;
           return null;
         }
 
-        const totalAmount = Number(String(r[amountIdx] || '').replace(/,/g, ''));
+        const totalAmount = parseAmount(r[amountIdx]);
         const errors: Array<{ field: string; message: string }> = [];
 
         if (!invoiceNumber) errors.push({ field: 'invoiceNumber', message: 'Missing invoice number' });
@@ -101,9 +161,12 @@ export async function POST(req: NextRequest) {
 
         return {
           rowNumber: headerRowIndex + idx + 2,
+          cmpCode,
+          firm,
           invoiceNumber,
           shopName,
           date,
+          route,
           totalAmount: Number.isNaN(totalAmount) ? 0 : totalAmount,
           hasError: errors.length > 0,
           errors,
@@ -139,6 +202,7 @@ export async function POST(req: NextRequest) {
         ignoredTotalRows,
       },
       mappedColumns: {
+        cmpCode: cmpCodeIdx === -1 ? null : rawHeaders[cmpCodeIdx],
         invoiceNumber: rawHeaders[invoiceIdx],
         shopName: rawHeaders[shopIdx],
         amount: rawHeaders[amountIdx],

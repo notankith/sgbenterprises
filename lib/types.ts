@@ -3,6 +3,9 @@ export type DeliveryStatus = 'delivered' | 'pending';
 
 export type Invoice = {
   _id?: string;
+  cmpCode?: string;
+  firm?: string;
+  route?: string;
   invoiceNumber: string;
   date: string;
   shopName: string;

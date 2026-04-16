@@ -67,25 +67,29 @@ export async function POST(req: NextRequest) {
     const importYear = new Date().getFullYear();
     const clean = rows
       .filter((r) => !r.duplicate && !r.hasError)
-      .map((r) => ({
-        firm: String(r.firm || '').trim().toUpperCase(),
-        invoiceNumber: String(r.invoiceNumber || '').trim(),
-        date: normalizeImportDate(r.date, importYear) || '',
-        route: String(r.route || '').trim(),
-        shopName: String(r.shopName || '').trim(),
-        totalAmount: Number(r.totalAmount || 0),
-        paidAmount: 0,
-        paymentStatus: 'unpaid',
-        deliveryStatus: 'pending',
-        deliveryPerson: null,
-        notes: [],
-        archived: false,
-        paymentHistory: [],
-        deductions: [],
-        deductedAmount: 0,
-        createdAt: new Date().toISOString(),
-      }))
-      .filter((r) => r.firm && r.invoiceNumber && r.date && r.route && r.shopName && Number.isFinite(r.totalAmount) && r.totalAmount !== 0);
+      .map((r) => {
+        const cmpCode = String(r.cmpCode || r.firm || '').trim().toUpperCase();
+        return {
+          cmpCode,
+          firm: cmpCode,
+          invoiceNumber: String(r.invoiceNumber || '').trim(),
+          date: normalizeImportDate(r.date, importYear) || '',
+          route: String(r.route || '').trim(),
+          shopName: String(r.shopName || '').trim(),
+          totalAmount: Number(r.totalAmount || 0),
+          paidAmount: 0,
+          paymentStatus: 'unpaid',
+          deliveryStatus: 'pending',
+          deliveryPerson: null,
+          notes: [],
+          archived: false,
+          paymentHistory: [],
+          deductions: [],
+          deductedAmount: 0,
+          createdAt: new Date().toISOString(),
+        };
+      })
+      .filter((r) => r.cmpCode && r.invoiceNumber && r.date && r.route && r.shopName && Number.isFinite(r.totalAmount) && r.totalAmount !== 0);
 
     if (!clean.length) {
       return NextResponse.json({

@@ -6,7 +6,6 @@ import {
   SortingState,
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -82,6 +81,8 @@ type InvoiceRow = {
   }>;
   deliveredAt?: string;
   deliveredDate?: string;
+  cmpCode?: string;
+  firm?: string;
 };
 
 type Summary = {
@@ -101,6 +102,7 @@ type Summary = {
     lowPerformingDrivers: { name: string; assigned: number; delivered: number; efficiency: number }[];
     highExpenses: boolean;
   };
+  availableCmpCodes?: string[];
 };
 
 type ApprovalRow = {
@@ -235,11 +237,17 @@ export default function LogisticsApp() {
   const [pageLoading, setPageLoading] = useState(true);
 
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [selectedCmpCode, setSelectedCmpCode] = useState('');
+  const [availableCmpCodes, setAvailableCmpCodes] = useState<string[]>([]);
 
   const [invoiceRows, setInvoiceRows] = useState<InvoiceRow[]>([]);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceTotal, setInvoiceTotal] = useState(0);
   const [invoicePage, setInvoicePage] = useState(1);
+  const [invoiceSort, setInvoiceSort] = useState<{ sortBy: string; sortDirection: 'asc' | 'desc' }>({
+    sortBy: 'date',
+    sortDirection: 'desc',
+  });
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
   const [activeInvoiceFilter, setActiveInvoiceFilter] = useState<InvoiceFilterKey | null>(null);
   const [invoiceFilters, setInvoiceFilters] = useState<InvoiceFilters>({
@@ -425,9 +433,15 @@ export default function LogisticsApp() {
     window.location.reload();
   }
 
-  async function loadSummary() {
-    const data = await fetchJson('/api/dashboard/summary');
+  async function loadSummary(cmpCode = selectedCmpCode) {
+    const params = new URLSearchParams();
+    if (cmpCode) params.set('cmpCode', cmpCode);
+    const data = await fetchJson(`/api/dashboard/summary${params.size ? `?${params.toString()}` : ''}`);
     setSummary(data);
+    const options = Array.isArray(data?.availableCmpCodes)
+      ? data.availableCmpCodes.map((x: unknown) => String(x || '').trim().toUpperCase()).filter(Boolean)
+      : [];
+    setAvailableCmpCodes(options);
   }
 
   async function loadInvoices(page = invoicePage) {
@@ -436,6 +450,8 @@ export default function LogisticsApp() {
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
+        sortBy: invoiceSort.sortBy,
+        sortDirection: invoiceSort.sortDirection,
         invoiceNumber: debouncedInvoiceNumber,
         shopName: debouncedShopName,
         dateFrom: invoiceFilters.dateFrom,
@@ -534,7 +550,14 @@ export default function LogisticsApp() {
     invoiceFilters.dateTo,
     invoiceFilters.deliveryStatus,
     invoiceFilters.paymentStatus,
+    invoiceSort.sortBy,
+    invoiceSort.sortDirection,
   ]);
+
+  function updateInvoiceSort(sortBy: string, sortDirection: 'asc' | 'desc') {
+    setInvoiceSort({ sortBy, sortDirection });
+    setInvoicePage(1);
+  }
 
   useEffect(() => {
     if (activeTab === 'trips') {
@@ -974,6 +997,26 @@ export default function LogisticsApp() {
 
           {!pageLoading && activeTab === 'dashboard' && summary ? (
             <div className="space-y-6">
+              <div className="card p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="text-xs font-medium uppercase tracking-wide text-slate-500">CmpCode Filter</label>
+                  <select
+                    value={selectedCmpCode}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setSelectedCmpCode(next);
+                      loadSummary(next).catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to load dashboard'));
+                    }}
+                    className="min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">All CmpCodes</option>
+                    {availableCmpCodes.map((code) => (
+                      <option key={code} value={code}>{code}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                 <StatCard label="Total Invoices" value={String(summary.totalInvoices)} icon={FileText} tone="" />
                 <StatCard label="Paid" value={String(summary.paid)} icon={CheckCircle2} tone="" />
@@ -1016,10 +1059,19 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {pageLoading && activeTab === 'invoices' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={4} />
+            </div>
+          ) : null}
+
           {!pageLoading && activeTab === 'invoices' ? (
             <InvoiceTable
               rows={invoiceRows}
               loading={invoiceLoading}
+              sortBy={invoiceSort.sortBy}
+              sortDirection={invoiceSort.sortDirection}
+              onSortChange={updateInvoiceSort}
               filters={invoiceFilters}
               setFilters={setInvoiceFilters}
               activeFilter={activeInvoiceFilter}
@@ -1047,6 +1099,12 @@ export default function LogisticsApp() {
                 })
               }
             />
+          ) : null}
+
+          {pageLoading && activeTab === 'importExport' ? (
+            <div className="space-y-4">
+              <CardSkeleton rows={4} />
+            </div>
           ) : null}
 
           {!pageLoading && activeTab === 'importExport' ? (
@@ -2013,6 +2071,9 @@ export default function LogisticsApp() {
 function InvoiceTable({
   rows,
   loading,
+  sortBy,
+  sortDirection,
+  onSortChange,
   filters,
   setFilters,
   activeFilter,
@@ -2031,6 +2092,9 @@ function InvoiceTable({
 }: {
   rows: InvoiceRow[];
   loading: boolean;
+  sortBy: string;
+  sortDirection: 'asc' | 'desc';
+  onSortChange: (sortBy: string, sortDirection: 'asc' | 'desc') => void;
   filters: InvoiceFilters;
   setFilters: React.Dispatch<React.SetStateAction<InvoiceFilters>>;
   activeFilter: InvoiceFilterKey | null;
@@ -2047,7 +2111,10 @@ function InvoiceTable({
   onArchive: (invoice: InvoiceRow) => void;
   onResetFilters: () => void;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const sorting = useMemo<SortingState>(
+    () => [{ id: sortBy, desc: sortDirection === 'desc' }],
+    [sortBy, sortDirection],
+  );
 
   const columns = useMemo<ColumnDef<InvoiceRow>[]>(
     () => [
@@ -2055,6 +2122,11 @@ function InvoiceTable({
         accessorKey: 'invoiceNumber',
         header: 'Invoice Number',
         meta: { filter: 'invoiceNumber' },
+      },
+      {
+        accessorKey: 'cmpCode',
+        header: 'CmpCode',
+        cell: (info) => String(info.row.original.cmpCode || info.row.original.firm || '-'),
       },
       {
         accessorKey: 'date',
@@ -2092,9 +2164,18 @@ function InvoiceTable({
     data: rows,
     columns,
     state: { sorting },
-    onSortingChange: setSorting,
+    manualSorting: true,
+    onSortingChange: (updater) => {
+      const nextSorting = typeof updater === 'function' ? updater(sorting) : updater;
+      if (!nextSorting.length) return;
+      const next = nextSorting[0];
+      const nextSortBy = String(next.id);
+      const nextSortDirection = next.desc ? 'desc' : 'asc';
+      if (nextSortBy !== sortBy || nextSortDirection !== sortDirection) {
+        onSortChange(nextSortBy, nextSortDirection);
+      }
+    },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   const hasActiveFilters = Boolean(
@@ -2162,7 +2243,7 @@ function InvoiceTable({
               {loading
                 ? Array.from({ length: 6 }).map((_, i) => (
                     <tr key={i} className="border-b border-slate-200">
-                      <td colSpan={6} className="px-4 py-4">
+                      <td colSpan={7} className="px-4 py-4">
                         <div className="skeleton h-6 w-full" />
                       </td>
                     </tr>
@@ -2170,7 +2251,7 @@ function InvoiceTable({
                 : table.getRowModel().rows.length === 0
                   ? (
                     <tr className="border-b border-slate-200">
-                      <td className="px-4 py-8 text-center text-slate-500" colSpan={6}>
+                      <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
                         No invoices found.
                       </td>
                     </tr>
@@ -2196,7 +2277,7 @@ function InvoiceTable({
                               exit={{ opacity: 0 }}
                               transition={{ duration: 0.2 }}
                             >
-                              <td colSpan={6} className="bg-slate-50 px-4 py-4">
+                              <td colSpan={7} className="bg-slate-50 px-4 py-4">
                                 <motion.div
                                   initial={{ height: 0 }}
                                   animate={{ height: 'auto' }}
@@ -2216,6 +2297,10 @@ function InvoiceTable({
                                           <div className="flex items-center justify-between">
                                             <span className="text-slate-500">Driver</span>
                                             <span className="font-medium text-slate-900">{row.original.deliveryPerson || 'Unassigned'}</span>
+                                          </div>
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-slate-500">CmpCode</span>
+                                            <span className="font-medium text-slate-900">{row.original.cmpCode || row.original.firm || '-'}</span>
                                           </div>
                                           <div className="flex items-center justify-between">
                                             <span className="text-slate-500">Delivered At</span>

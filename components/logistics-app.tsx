@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, Fragment, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ColumnDef,
   SortingState,
@@ -20,7 +20,6 @@ import {
   FileText,
   FilterX,
   LayoutDashboard,
-  LogOut,
   ShieldCheck,
   Truck,
   UploadCloud,
@@ -32,11 +31,12 @@ import { Badge } from '@/components/ui/badge';
 
 type TabKey = 'dashboard' | 'invoices' | 'importExport' | 'trips' | 'approvals' | 'cheques' | 'expenses';
 type TripsSubTab = 'new' | 'past';
-type InvoiceFilterKey = 'invoiceNumber' | 'date' | 'shopName' | 'amount' | 'deliveryStatus' | 'paymentStatus';
+type InvoiceFilterKey = 'invoiceNumber' | 'date' | 'shopName' | 'route' | 'amount' | 'deliveryStatus' | 'paymentStatus';
 
 type InvoiceFilters = {
   invoiceNumber: string;
   shopName: string;
+  route: string[];
   dateFrom: string;
   dateTo: string;
   amountMin: string;
@@ -52,7 +52,7 @@ type InvoiceRow = {
   shopName: string;
   totalAmount: number;
   paidAmount: number;
-  paymentStatus: 'paid' | 'partial' | 'unpaid';
+  paymentStatus: 'paid' | 'partial' | 'unpaid' | 'payable';
   deliveryStatus: 'delivered' | 'pending';
   deliveryPerson?: string | null;
   assignedTripId?: string;
@@ -81,6 +81,7 @@ type InvoiceRow = {
   }>;
   deliveredAt?: string;
   deliveredDate?: string;
+  route?: string;
   cmpCode?: string;
   firm?: string;
 };
@@ -193,8 +194,38 @@ function statusBadgeClass(status: string) {
   if (status === 'paid') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
   if (status === 'partial') return 'bg-amber-50 text-amber-700 border-amber-200';
   if (status === 'unpaid') return 'bg-rose-50 text-rose-700 border-rose-200';
+  if (status === 'payable') return 'bg-orange-50 text-orange-700 border-orange-200';
   if (status === 'delivered') return 'bg-sky-50 text-sky-700 border-sky-200';
   return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function getTotalDeducted(invoice: Pick<InvoiceRow, 'deductedAmount' | 'deductions'>) {
+  if (typeof invoice.deductedAmount === 'number') return Number(invoice.deductedAmount || 0);
+  if (Array.isArray(invoice.deductions)) {
+    return invoice.deductions.reduce((sum, item) => sum + Number(item?.amount || 0), 0);
+  }
+  return 0;
+}
+
+function getInvoicePaymentMetrics(invoice: Pick<InvoiceRow, 'totalAmount' | 'paidAmount' | 'deductedAmount' | 'deductions'>) {
+  const total = Number(invoice.totalAmount || 0);
+  const paid = Number(invoice.paidAmount || 0);
+  const deducted = getTotalDeducted(invoice);
+  const remaining = total - paid - deducted;
+  const epsilon = 0.01;
+
+  const settled = Math.abs(remaining) <= epsilon || Math.abs(paid + deducted - total) <= epsilon;
+  const status: InvoiceRow['paymentStatus'] = settled
+    ? 'paid'
+    : remaining < -epsilon
+      ? 'payable'
+      : remaining > epsilon
+        ? paid + deducted > epsilon
+          ? 'partial'
+          : 'unpaid'
+        : 'paid';
+
+  return { total, paid, deducted, remaining, status };
 }
 
 function useDebouncedValue<T>(value: T, delay = 350) {
@@ -231,14 +262,112 @@ function CardSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
+function MultiSelectDropdown({
+  options,
+  selected,
+  onChange,
+  placeholder,
+  className = '',
+}: {
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  placeholder: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [open]);
+
+  const selectedSet = new Set(selected.map((x) => x.toLowerCase()));
+  const summaryLabel = selected.length === 0
+    ? placeholder
+    : selected.length <= 2
+      ? selected.join(', ')
+      : `${selected.length} selected`;
+
+  return (
+    <div ref={rootRef} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((prev) => !prev);
+        }}
+        className="flex w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-xs text-slate-700"
+      >
+        <span className="truncate">{summaryLabel}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-slate-500 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open ? (
+        <div
+          className="absolute right-0 z-30 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mb-1 flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Options</p>
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="text-[11px] text-slate-500 hover:text-slate-700"
+            >
+              Clear
+            </button>
+          </div>
+
+          <div className="max-h-48 space-y-1 overflow-auto pr-1">
+            {options.length ? (
+              options.map((option) => {
+                const key = option.toLowerCase();
+                const checked = selectedSet.has(key);
+                return (
+                  <label key={option} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        if (checked) {
+                          onChange(selected.filter((value) => value.toLowerCase() !== key));
+                        } else {
+                          onChange([...selected, option]);
+                        }
+                      }}
+                    />
+                    <span className="truncate">{option}</span>
+                  </label>
+                );
+              })
+            ) : (
+              <p className="px-2 py-1 text-xs text-slate-500">No routes available.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function LogisticsApp() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [apiError, setApiError] = useState('');
   const [pageLoading, setPageLoading] = useState(true);
 
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [selectedCmpCode, setSelectedCmpCode] = useState('');
   const [availableCmpCodes, setAvailableCmpCodes] = useState<string[]>([]);
+  const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
 
   const [invoiceRows, setInvoiceRows] = useState<InvoiceRow[]>([]);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
@@ -253,6 +382,7 @@ export default function LogisticsApp() {
   const [invoiceFilters, setInvoiceFilters] = useState<InvoiceFilters>({
     invoiceNumber: '',
     shopName: '',
+    route: [],
     dateFrom: '',
     dateTo: '',
     amountMin: '',
@@ -285,12 +415,15 @@ export default function LogisticsApp() {
   const [tripsSubTab, setTripsSubTab] = useState<TripsSubTab>('new');
   const [agents, setAgents] = useState<Agent[]>([]);
   const [showAgentModal, setShowAgentModal] = useState(false);
+  const [showAgentCredentialsModal, setShowAgentCredentialsModal] = useState(false);
   const [agentForm, setAgentForm] = useState({ name: '', username: '', password: '' });
+  const [agentCredentialsForm, setAgentCredentialsForm] = useState({ name: '', username: '', password: '' });
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [tripSheets, setTripSheets] = useState<TripSheet[]>([]);
   const [pendingPool, setPendingPool] = useState<InvoiceRow[]>([]);
   const [tripSelected, setTripSelected] = useState<string[]>([]);
   const [tripSearch, setTripSearch] = useState('');
+  const [tripRouteFilters, setTripRouteFilters] = useState<string[]>([]);
   const [expandedTrip, setExpandedTrip] = useState<string | null>(null);
   const [tripFilters, setTripFilters] = useState({
     driver: '',
@@ -310,6 +443,9 @@ export default function LogisticsApp() {
     bankName: '',
   });
   const [paymentFormError, setPaymentFormError] = useState('');
+
+  const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
+  const actionLockRef = useRef(new Set<string>());
 
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteModalInvoice, setNoteModalInvoice] = useState<InvoiceRow | null>(null);
@@ -354,9 +490,14 @@ export default function LogisticsApp() {
   const pageTitle = tabs.find((t) => t.key === activeTab)?.label || 'Dashboard';
   const filteredPendingPool = useMemo(() => {
     const q = debouncedTripSearch.trim().toLowerCase();
-    if (!q) return pendingPool;
-    return pendingPool.filter((row) => row.invoiceNumber.toLowerCase().includes(q) || row.shopName.toLowerCase().includes(q));
-  }, [pendingPool, debouncedTripSearch]);
+    const selectedRoutes = new Set(tripRouteFilters.map((x) => x.toLowerCase()));
+    return pendingPool.filter((row) => {
+      const bySearch = !q || row.invoiceNumber.toLowerCase().includes(q) || row.shopName.toLowerCase().includes(q);
+      const routeValue = String(row.route || '').trim().toLowerCase();
+      const byRoute = selectedRoutes.size === 0 || selectedRoutes.has(routeValue);
+      return bySearch && byRoute;
+    });
+  }, [pendingPool, debouncedTripSearch, tripRouteFilters]);
 
   const filteredTripHistory = useMemo(() => {
     const selectedAgent = agents.find((a) => a._id === selectedAgentId);
@@ -434,14 +575,39 @@ export default function LogisticsApp() {
   }
 
   async function loadSummary(cmpCode = selectedCmpCode) {
-    const params = new URLSearchParams();
-    if (cmpCode) params.set('cmpCode', cmpCode);
-    const data = await fetchJson(`/api/dashboard/summary${params.size ? `?${params.toString()}` : ''}`);
-    setSummary(data);
-    const options = Array.isArray(data?.availableCmpCodes)
-      ? data.availableCmpCodes.map((x: unknown) => String(x || '').trim().toUpperCase()).filter(Boolean)
-      : [];
-    setAvailableCmpCodes(options);
+    setSummaryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (cmpCode) params.set('cmpCode', cmpCode);
+      const data = await fetchJson(`/api/dashboard/summary${params.size ? `?${params.toString()}` : ''}`);
+      setSummary(data);
+      const options = Array.isArray(data?.availableCmpCodes)
+        ? data.availableCmpCodes.map((x: unknown) => String(x || '').trim().toUpperCase()).filter(Boolean)
+        : [];
+      setAvailableCmpCodes(options);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
+  function isActionLoading(key: string) {
+    return Boolean(actionLoading[key]);
+  }
+
+  async function runAction(key: string, action: () => Promise<void>) {
+    if (actionLockRef.current.has(key)) return;
+    actionLockRef.current.add(key);
+    setActionLoading((prev) => ({ ...prev, [key]: true }));
+    try {
+      await action();
+    } finally {
+      actionLockRef.current.delete(key);
+      setActionLoading((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
   }
 
   async function loadInvoices(page = invoicePage) {
@@ -461,6 +627,9 @@ export default function LogisticsApp() {
         deliveryStatus: invoiceFilters.deliveryStatus,
         paymentStatus: invoiceFilters.paymentStatus,
       });
+      invoiceFilters.route.forEach((route) => {
+        params.append('route', route);
+      });
       const data = await fetchJson(`/api/invoices?${params.toString()}`);
       setInvoiceRows(data.rows || []);
       setInvoiceTotal(data.total || 0);
@@ -473,6 +642,14 @@ export default function LogisticsApp() {
   async function loadApprovals() {
     const data = await fetchJson('/api/approvals');
     setApprovals(data);
+  }
+
+  async function loadInvoiceFilterMeta() {
+    const data = await fetchJson('/api/invoices?meta=filters');
+    const routes = Array.isArray(data?.routes)
+      ? data.routes.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+      : [];
+    setAvailableRoutes(routes);
   }
 
   async function loadExpenses() {
@@ -521,6 +698,7 @@ export default function LogisticsApp() {
         loadSummary(),
         loadInvoices(1),
         loadApprovals(),
+        loadInvoiceFilterMeta(),
         loadExpenses(),
         loadCheques(),
         loadTripSheets(),
@@ -546,6 +724,7 @@ export default function LogisticsApp() {
     debouncedShopName,
     debouncedAmountMin,
     debouncedAmountMax,
+    invoiceFilters.route.join('|'),
     invoiceFilters.dateFrom,
     invoiceFilters.dateTo,
     invoiceFilters.deliveryStatus,
@@ -557,6 +736,21 @@ export default function LogisticsApp() {
   function updateInvoiceSort(sortBy: string, sortDirection: 'asc' | 'desc') {
     setInvoiceSort({ sortBy, sortDirection });
     setInvoicePage(1);
+  }
+
+  function resetInvoiceFilters() {
+    setInvoiceFilters({
+      invoiceNumber: '',
+      shopName: '',
+      route: [],
+      dateFrom: '',
+      dateTo: '',
+      amountMin: '',
+      amountMax: '',
+      deliveryStatus: '',
+      paymentStatus: '',
+    });
+    setActiveInvoiceFilter(null);
   }
 
   useEffect(() => {
@@ -589,12 +783,56 @@ export default function LogisticsApp() {
     if (data?.agent?._id) setSelectedAgentId(data.agent._id);
   }
 
+  function openAgentCredentialsModal() {
+    const selectedAgent = agents.find((a) => a._id === selectedAgentId);
+    if (!selectedAgent) {
+      setApiError('Select a driver first.');
+      return;
+    }
+
+    setAgentCredentialsForm({
+      name: selectedAgent.name || '',
+      username: selectedAgent.username || '',
+      password: '',
+    });
+    setApiError('');
+    setShowAgentCredentialsModal(true);
+  }
+
+  async function updateSelectedAgentPassword() {
+    if (!selectedAgentId) {
+      setApiError('Select a driver first.');
+      return;
+    }
+
+    const password = agentCredentialsForm.password.trim();
+    if (!password) {
+      setApiError('Enter a new password.');
+      return;
+    }
+    if (password.length < 4) {
+      setApiError('New password must be at least 4 characters.');
+      return;
+    }
+
+    setApiError('');
+    await fetchJson(`/api/trips/agents/${selectedAgentId}/password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+
+    setAgentCredentialsForm((prev) => ({ ...prev, password: '' }));
+    setShowAgentCredentialsModal(false);
+    window.alert('Password updated successfully.');
+  }
+
   function openPaymentModal(invoice: InvoiceRow) {
-    const remaining = Math.max(0, Number(invoice.totalAmount || 0) - Number(invoice.paidAmount || 0));
+    const { remaining } = getInvoicePaymentMetrics(invoice);
     setPaymentModalInvoice(invoice);
     setPaymentForm({
       mode: 'cash',
-      amount: remaining ? String(remaining) : '',
+      amount: remaining > 0 ? String(remaining) : '',
       receivedBy: '',
       date: new Date().toISOString().slice(0, 10),
       reference: '',
@@ -627,8 +865,8 @@ export default function LogisticsApp() {
       setPaymentFormError('Received By is required.');
       return;
     }
-    if ((mode === 'upi' || mode === 'credit_note') && !reference) {
-      setPaymentFormError(mode === 'upi' ? 'UPI reference is required.' : 'Credit note reference is required.');
+    if (mode === 'credit_note' && !reference) {
+      setPaymentFormError('Credit note reference is required.');
       return;
     }
     if (mode === 'cheque' && (!chequeNumber || !bankName)) {
@@ -636,35 +874,28 @@ export default function LogisticsApp() {
       return;
     }
 
-    await fetchJson('/api/approvals', {
+    await fetchJson('/api/payments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type: 'payment',
-        payload: {
-          invoiceNumber: paymentModalInvoice.invoiceNumber,
-          invoiceId: paymentModalInvoice._id,
-          totalAmount: Number(paymentModalInvoice.totalAmount || 0),
-          deductedAmount: Number(paymentModalInvoice.deductedAmount || 0),
-          deductions: Array.isArray(paymentModalInvoice.deductions) ? paymentModalInvoice.deductions : [],
-          amount,
-          mode,
-          date: paymentForm.date,
-          collectedBy: receivedBy,
-          role: 'admin',
-          reference: reference || null,
-          chequeNumber: chequeNumber || null,
-          bankName: bankName || null,
-          status: 'pending',
-          tripsheetId: paymentModalInvoice.assignedTripId || null,
-          driverName: paymentModalInvoice.deliveryPerson || 'Unknown',
-        },
+        invoiceNumber: paymentModalInvoice.invoiceNumber,
+        invoiceId: paymentModalInvoice._id,
+        amount,
+        mode,
+        date: paymentForm.date,
+        collectedBy: receivedBy,
+        role: 'admin',
+        reference: reference || null,
+        chequeNumber: chequeNumber || null,
+        bankName: bankName || null,
+        tripsheetId: paymentModalInvoice.assignedTripId || null,
+        driverName: paymentModalInvoice.deliveryPerson || 'Unknown',
       }),
     });
 
     setShowPaymentModal(false);
     setPaymentModalInvoice(null);
-    await loadApprovals();
+    await Promise.all([loadInvoices(), loadSummary(), loadCheques(), loadApprovals()]);
   }
 
   function openNoteModal(invoice: InvoiceRow) {
@@ -909,6 +1140,17 @@ export default function LogisticsApp() {
   }
 
   const selectedAgent = agents.find((a) => a._id === selectedAgentId);
+  const hasInvoiceFilters = Boolean(
+    invoiceFilters.invoiceNumber ||
+      invoiceFilters.shopName ||
+      invoiceFilters.route.length ||
+      invoiceFilters.dateFrom ||
+      invoiceFilters.dateTo ||
+      invoiceFilters.amountMin ||
+      invoiceFilters.amountMax ||
+      invoiceFilters.deliveryStatus ||
+      invoiceFilters.paymentStatus,
+  );
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -963,7 +1205,6 @@ export default function LogisticsApp() {
         <section className="min-w-0 flex-1 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{pageTitle}</p>
               <h1 className="text-2xl font-semibold text-slate-900">{pageTitle}</h1>
             </div>
               <div className="flex flex-wrap items-center gap-3">
@@ -972,11 +1213,12 @@ export default function LogisticsApp() {
                 Admin
               </div>
               <button
-                onClick={logout}
+                onClick={resetInvoiceFilters}
+                disabled={activeTab !== 'invoices' || !hasInvoiceFilters}
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100"
               >
-                <LogOut className="h-4 w-4" />
-                Logout
+                <FilterX className="h-4 w-4" />
+                Reset Filters
               </button>
             </div>
           </div>
@@ -987,7 +1229,7 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
-          {pageLoading && activeTab === 'dashboard' ? (
+          {(pageLoading || summaryLoading) && activeTab === 'dashboard' ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               {Array.from({ length: 6 }).map((_, index) => (
                 <div key={index} className="card h-28 animate-pulse bg-slate-100" />
@@ -995,7 +1237,7 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
-          {!pageLoading && activeTab === 'dashboard' && summary ? (
+          {!pageLoading && !summaryLoading && activeTab === 'dashboard' && summary ? (
             <div className="space-y-6">
               <div className="card p-4">
                 <div className="flex flex-wrap items-center gap-3">
@@ -1007,6 +1249,7 @@ export default function LogisticsApp() {
                       setSelectedCmpCode(next);
                       loadSummary(next).catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to load dashboard'));
                     }}
+                    disabled={summaryLoading}
                     className="min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                   >
                     <option value="">All CmpCodes</option>
@@ -1073,6 +1316,7 @@ export default function LogisticsApp() {
               sortDirection={invoiceSort.sortDirection}
               onSortChange={updateInvoiceSort}
               filters={invoiceFilters}
+              routeOptions={availableRoutes}
               setFilters={setInvoiceFilters}
               activeFilter={activeInvoiceFilter}
               setActiveFilter={setActiveInvoiceFilter}
@@ -1081,23 +1325,12 @@ export default function LogisticsApp() {
               page={invoicePage}
               pages={invoicePages}
               total={invoiceTotal}
+              onPageJump={loadInvoices}
               onPrev={() => loadInvoices(invoicePage - 1)}
               onNext={() => loadInvoices(invoicePage + 1)}
               onAddPayment={openPaymentModal}
               onAddNote={openNoteModal}
               onArchive={archiveInvoice}
-              onResetFilters={() =>
-                setInvoiceFilters({
-                  invoiceNumber: '',
-                  shopName: '',
-                  dateFrom: '',
-                  dateTo: '',
-                  amountMin: '',
-                  amountMax: '',
-                  deliveryStatus: '',
-                  paymentStatus: '',
-                })
-              }
             />
           ) : null}
 
@@ -1259,17 +1492,26 @@ export default function LogisticsApp() {
           {!pageLoading && activeTab === 'trips' ? (
             <div className="space-y-4">
                 <div className="card p-5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-semibold text-slate-900">Delivery agents</h3>
                       <p className="mt-1 text-xs text-slate-500">Create and assign agents using unique accounts.</p>
                     </div>
-                    <button
-                      onClick={() => setShowAgentModal(true)}
-                      className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700"
-                    >
-                      Create Agent
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={openAgentCredentialsModal}
+                        disabled={!selectedAgentId}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Credentials
+                      </button>
+                      <button
+                        onClick={() => setShowAgentModal(true)}
+                        className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700"
+                      >
+                        Create Agent
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1314,11 +1556,68 @@ export default function LogisticsApp() {
                           Cancel
                         </button>
                         <button
-                          onClick={() => addDeliveryAgent().catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to add agent'))}
+                          onClick={() => runAction('create-agent', async () => addDeliveryAgent()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to add agent'))}
+                          disabled={isActionLoading('create-agent')}
                           className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white"
                         >
-                          Create
+                          {isActionLoading('create-agent') ? 'Creating...' : 'Create'}
                         </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {showAgentCredentialsModal ? (
+                <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4">
+                  <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-panel">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-slate-900">Agent Credentials</h3>
+                      <button onClick={() => setShowAgentCredentialsModal(false)} className="text-xs text-slate-500">Close</button>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      <div>
+                        <label className="text-xs font-medium text-slate-600">Agent Name</label>
+                        <input
+                          value={agentCredentialsForm.name}
+                          disabled
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-slate-600">Username</label>
+                        <input
+                          value={agentCredentialsForm.username}
+                          disabled
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-slate-600">Password</label>
+                        <input
+                          type="password"
+                          value={agentCredentialsForm.password}
+                          onChange={(e) => setAgentCredentialsForm((prev) => ({ ...prev, password: e.target.value }))}
+                          placeholder="Enter new password"
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => setShowAgentCredentialsModal(false)}
+                          className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                        >
+                          Cancel
+                        </button>
+                        {agentCredentialsForm.password.trim() ? (
+                          <button
+                            onClick={() => runAction('update-agent-password', async () => updateSelectedAgentPassword()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to update password'))}
+                            disabled={isActionLoading('update-agent-password')}
+                            className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white"
+                          >
+                            {isActionLoading('update-agent-password') ? 'Updating...' : 'Update Password'}
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1376,12 +1675,18 @@ export default function LogisticsApp() {
 
                   {tripsSubTab === 'new' ? (
                     <div className="mt-4 space-y-3">
-                      <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+                      <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_240px_auto_auto]">
                         <input
                           value={tripSearch}
                           onChange={(e) => setTripSearch(e.target.value)}
                           placeholder="Search by invoice number or shop name"
                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
+                        />
+                        <MultiSelectDropdown
+                          options={availableRoutes}
+                          selected={tripRouteFilters}
+                          onChange={setTripRouteFilters}
+                          placeholder="All Routes"
                         />
                         <button
                           onClick={() => selectVisibleTrips(true)}
@@ -1404,10 +1709,11 @@ export default function LogisticsApp() {
                           Add Credit Note
                         </button>
                         <button
-                          onClick={() => addToSelectedAgent().catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to assign invoices'))}
+                          onClick={() => runAction('assign-agent', async () => addToSelectedAgent()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to assign invoices'))}
+                          disabled={isActionLoading('assign-agent')}
                           className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700"
                         >
-                          Assign to agent
+                          {isActionLoading('assign-agent') ? 'Assigning...' : 'Assign to agent'}
                         </button>
                         <span className="text-xs text-slate-500">
                           Showing {filteredPendingPool.length} of {pendingPool.length} · Selected {tripSelected.length}
@@ -1480,8 +1786,8 @@ export default function LogisticsApp() {
                               </Badge>
                             </button>
                             <button
-                              onClick={() => completeTripSheet(t._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to complete trip sheet'))}
-                              disabled={t.status === 'Complete'}
+                              onClick={() => runAction(`complete-trip-${t._id}`, async () => completeTripSheet(t._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to complete trip sheet'))}
+                              disabled={t.status === 'Complete' || isActionLoading(`complete-trip-${t._id}`)}
                               title={t.status === 'Complete' ? 'Trip already completed' : 'Mark trip sheet as completed'}
                               className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -1555,10 +1861,11 @@ export default function LogisticsApp() {
                         </div>
                         <div className="flex gap-2">
                           <button
-                            onClick={() => approveGroup(group.rows.map((row) => row._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve group'))}
+                            onClick={() => runAction(`approve-group-${group.key}`, async () => approveGroup(group.rows.map((row) => row._id))).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve group'))}
+                            disabled={isActionLoading(`approve-group-${group.key}`)}
                             className="rounded border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
                           >
-                            Approve All
+                            {isActionLoading(`approve-group-${group.key}`) ? 'Approving...' : 'Approve All'}
                           </button>
                           <button
                             onClick={() =>
@@ -1618,16 +1925,18 @@ export default function LogisticsApp() {
                                   <td className="px-3 py-2">
                                     <div className="flex gap-1">
                                       <button
-                                        onClick={() => approveItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve'))}
+                                        onClick={() => runAction(`approve-${approval._id}`, async () => approveItem(approval._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve'))}
+                                        disabled={isActionLoading(`approve-${approval._id}`)}
                                         className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700"
                                       >
-                                        Approve
+                                        {isActionLoading(`approve-${approval._id}`) ? 'Approving...' : 'Approve'}
                                       </button>
                                       <button
-                                        onClick={() => rejectItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to reject'))}
+                                        onClick={() => runAction(`reject-${approval._id}`, async () => rejectItem(approval._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to reject'))}
+                                        disabled={isActionLoading(`reject-${approval._id}`)}
                                         className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700"
                                       >
-                                        Reject
+                                        {isActionLoading(`reject-${approval._id}`) ? 'Rejecting...' : 'Reject'}
                                       </button>
                                     </div>
                                   </td>
@@ -1703,10 +2012,11 @@ export default function LogisticsApp() {
                   className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500"
                 />
                 <button
-                  onClick={() => createManualCheque().catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to create cheque'))}
+                  onClick={() => runAction('add-cheque-entry', async () => createManualCheque()).catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to create cheque'))}
+                  disabled={isActionLoading('add-cheque-entry')}
                   className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white"
                 >
-                  Add Cheque Entry
+                  {isActionLoading('add-cheque-entry') ? 'Adding...' : 'Add Cheque Entry'}
                 </button>
               </div>
 
@@ -1827,16 +2137,18 @@ export default function LogisticsApp() {
                       <p className="mt-1 text-xs text-slate-600">{approval.payload?.note || approval.payload?.notes || '-'}</p>
                       <div className="mt-2 flex gap-2">
                         <button
-                          onClick={() => approveItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve'))}
+                          onClick={() => runAction(`approve-${approval._id}`, async () => approveItem(approval._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to approve'))}
+                          disabled={isActionLoading(`approve-${approval._id}`)}
                           className="rounded border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
                         >
-                          Approve
+                          {isActionLoading(`approve-${approval._id}`) ? 'Approving...' : 'Approve'}
                         </button>
                         <button
-                          onClick={() => rejectItem(approval._id).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to reject'))}
+                          onClick={() => runAction(`reject-${approval._id}`, async () => rejectItem(approval._id)).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to reject'))}
+                          disabled={isActionLoading(`reject-${approval._id}`)}
                           className="rounded border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700"
                         >
-                          Reject
+                          {isActionLoading(`reject-${approval._id}`) ? 'Rejecting...' : 'Reject'}
                         </button>
                       </div>
                     </div>
@@ -1872,10 +2184,11 @@ export default function LogisticsApp() {
                   className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                 />
                 <button
-                  onClick={() => createExpense().catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to create expense'))}
+                  onClick={() => runAction('add-expense', async () => createExpense()).catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to create expense'))}
+                  disabled={isActionLoading('add-expense')}
                   className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white"
                 >
-                  Add Expense
+                  {isActionLoading('add-expense') ? 'Adding...' : 'Add Expense'}
                 </button>
                 <input
                   placeholder="Notes (optional)"
@@ -1969,7 +2282,9 @@ export default function LogisticsApp() {
                   </div>
                   {(paymentForm.mode === 'upi' || paymentForm.mode === 'credit_note') ? (
                     <div className="md:col-span-2">
-                      <label className="text-xs font-medium text-slate-600">Step 3: Reference</label>
+                      <label className="text-xs font-medium text-slate-600">
+                        {paymentForm.mode === 'upi' ? 'Step 3: Reference (Optional)' : 'Step 3: Reference'}
+                      </label>
                       <input
                         value={paymentForm.reference}
                         onChange={(e) => setPaymentForm((prev) => ({ ...prev, reference: e.target.value }))}
@@ -2004,15 +2319,17 @@ export default function LogisticsApp() {
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setShowPaymentModal(false)}
+                    disabled={isActionLoading('submit-payment')}
                     className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => submitPaymentApproval().catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to submit payment'))}
+                    onClick={() => runAction('submit-payment', async () => submitPaymentApproval()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to submit payment'))}
+                    disabled={isActionLoading('submit-payment')}
                     className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white"
                   >
-                    Submit
+                    {isActionLoading('submit-payment') ? 'Confirming...' : 'Confirm'}
                   </button>
                 </div>
               </div>
@@ -2048,15 +2365,17 @@ export default function LogisticsApp() {
                 <div className="mt-4 flex justify-end gap-2">
                   <button
                     onClick={() => setShowNoteModal(false)}
+                    disabled={isActionLoading('save-note')}
                     className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => submitNote().catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to add note'))}
+                    onClick={() => runAction('save-note', async () => submitNote()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to add note'))}
+                    disabled={isActionLoading('save-note')}
                     className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white"
                   >
-                    Save Note
+                    {isActionLoading('save-note') ? 'Saving...' : 'Save Note'}
                   </button>
                 </div>
               </div>
@@ -2075,6 +2394,7 @@ function InvoiceTable({
   sortDirection,
   onSortChange,
   filters,
+  routeOptions,
   setFilters,
   activeFilter,
   setActiveFilter,
@@ -2083,12 +2403,12 @@ function InvoiceTable({
   page,
   pages,
   total,
+  onPageJump,
   onPrev,
   onNext,
   onAddPayment,
   onAddNote,
   onArchive,
-  onResetFilters,
 }: {
   rows: InvoiceRow[];
   loading: boolean;
@@ -2096,6 +2416,7 @@ function InvoiceTable({
   sortDirection: 'asc' | 'desc';
   onSortChange: (sortBy: string, sortDirection: 'asc' | 'desc') => void;
   filters: InvoiceFilters;
+  routeOptions: string[];
   setFilters: React.Dispatch<React.SetStateAction<InvoiceFilters>>;
   activeFilter: InvoiceFilterKey | null;
   setActiveFilter: React.Dispatch<React.SetStateAction<InvoiceFilterKey | null>>;
@@ -2104,12 +2425,12 @@ function InvoiceTable({
   page: number;
   pages: number;
   total: number;
+  onPageJump: (page: number) => void;
   onPrev: () => void;
   onNext: () => void;
   onAddPayment: (invoice: InvoiceRow) => void;
   onAddNote: (invoice: InvoiceRow) => void;
   onArchive: (invoice: InvoiceRow) => void;
-  onResetFilters: () => void;
 }) {
   const sorting = useMemo<SortingState>(
     () => [{ id: sortBy, desc: sortDirection === 'desc' }],
@@ -2127,6 +2448,13 @@ function InvoiceTable({
         accessorKey: 'cmpCode',
         header: 'CmpCode',
         cell: (info) => String(info.row.original.cmpCode || info.row.original.firm || '-'),
+      },
+      {
+        accessorKey: 'route',
+        header: 'Route',
+        meta: { filter: 'route' },
+        enableSorting: false,
+        cell: (info) => String(info.row.original.route || '-'),
       },
       {
         accessorKey: 'date',
@@ -2154,7 +2482,10 @@ function InvoiceTable({
         accessorKey: 'paymentStatus',
         header: 'Payment Status',
         meta: { filter: 'paymentStatus' },
-        cell: (info) => <Badge className={statusBadgeClass(String(info.getValue()))}>{String(info.getValue())}</Badge>,
+        cell: (info) => {
+          const metrics = getInvoicePaymentMetrics(info.row.original);
+          return <Badge className={statusBadgeClass(metrics.status)}>{metrics.status}</Badge>;
+        },
       },
     ],
     [],
@@ -2165,6 +2496,7 @@ function InvoiceTable({
     columns,
     state: { sorting },
     manualSorting: true,
+    enableSortingRemoval: false,
     onSortingChange: (updater) => {
       const nextSorting = typeof updater === 'function' ? updater(sorting) : updater;
       if (!nextSorting.length) return;
@@ -2178,32 +2510,41 @@ function InvoiceTable({
     getCoreRowModel: getCoreRowModel(),
   });
 
-  const hasActiveFilters = Boolean(
-    filters.invoiceNumber ||
-      filters.shopName ||
-      filters.dateFrom ||
-      filters.dateTo ||
-      filters.amountMin ||
-      filters.amountMax ||
-      filters.deliveryStatus ||
-      filters.paymentStatus,
-  );
+  const paginationItems = useMemo<Array<number | 'ellipsis-left' | 'ellipsis-right'>>(() => {
+    if (pages <= 8) {
+      return Array.from({ length: pages }, (_, i) => i + 1);
+    }
+
+    const items: Array<number | 'ellipsis-left' | 'ellipsis-right'> = [];
+
+    if (page <= 4) {
+      for (let p = 1; p <= 6; p += 1) {
+        items.push(p);
+      }
+      items.push('ellipsis-right', pages);
+      return items;
+    }
+
+    if (page >= pages - 3) {
+      items.push(1, 'ellipsis-left');
+      for (let p = pages - 5; p <= pages; p += 1) {
+        items.push(p);
+      }
+      return items;
+    }
+
+    items.push(1, 'ellipsis-left');
+    for (let p = page - 2; p <= page + 2; p += 1) {
+      items.push(p);
+    }
+    items.push('ellipsis-right', pages);
+    return items;
+  }, [page, pages]);
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          onClick={onResetFilters}
-          disabled={!hasActiveFilters}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-        >
-          <FilterX className="h-3.5 w-3.5" />
-          Reset Filters
-        </button>
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="overflow-auto">
+      <div className="card overflow-visible">
+        <div className="overflow-x-auto overflow-y-visible">
           <table className="min-w-full text-sm">
             <thead className="bg-white text-slate-600">
               {table.getHeaderGroups().map((headerGroup) => (
@@ -2218,12 +2559,14 @@ function InvoiceTable({
                           activeFilter={activeFilter}
                           setActiveFilter={setActiveFilter}
                           filters={filters}
+                          routeOptions={routeOptions}
                           setFilters={setFilters}
                           isFiltered={(() => {
                             const key = (header.column.columnDef.meta as { filter: InvoiceFilterKey } | undefined)?.filter;
                             if (!key) return false;
                             if (key === 'invoiceNumber') return Boolean(filters.invoiceNumber);
                             if (key === 'shopName') return Boolean(filters.shopName);
+                            if (key === 'route') return filters.route.length > 0;
                             if (key === 'date') return Boolean(filters.dateFrom || filters.dateTo);
                             if (key === 'amount') return Boolean(filters.amountMin || filters.amountMax);
                             if (key === 'deliveryStatus') return Boolean(filters.deliveryStatus);
@@ -2243,7 +2586,7 @@ function InvoiceTable({
               {loading
                 ? Array.from({ length: 6 }).map((_, i) => (
                     <tr key={i} className="border-b border-slate-200">
-                      <td colSpan={7} className="px-4 py-4">
+                      <td colSpan={8} className="px-4 py-4">
                         <div className="skeleton h-6 w-full" />
                       </td>
                     </tr>
@@ -2251,7 +2594,7 @@ function InvoiceTable({
                 : table.getRowModel().rows.length === 0
                   ? (
                     <tr className="border-b border-slate-200">
-                      <td className="px-4 py-8 text-center text-slate-500" colSpan={7}>
+                      <td className="px-4 py-8 text-center text-slate-500" colSpan={8}>
                         No invoices found.
                       </td>
                     </tr>
@@ -2277,7 +2620,7 @@ function InvoiceTable({
                               exit={{ opacity: 0 }}
                               transition={{ duration: 0.2 }}
                             >
-                              <td colSpan={7} className="bg-slate-50 px-4 py-4">
+                                <td colSpan={8} className="bg-slate-50 px-4 py-4">
                                 <motion.div
                                   initial={{ height: 0 }}
                                   animate={{ height: 'auto' }}
@@ -2386,33 +2729,27 @@ function InvoiceTable({
                                       <div className="rounded-lg border border-slate-200 bg-white p-3">
                                         <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Summary</h4>
                                         {(() => {
-                                          const totalAmount = Number(row.original.totalAmount || 0)
-                                          const totalPaid = Number(row.original.paidAmount || 0)
-                                          const totalDeducted =
-                                            typeof row.original.deductedAmount === 'number'
-                                              ? Number(row.original.deductedAmount)
-                                              : Array.isArray(row.original.deductions)
-                                                ? row.original.deductions.reduce((sum, item) => sum + Number(item?.amount || 0), 0)
-                                                : 0
-                                          const remaining = Math.max(0, totalAmount - totalPaid - totalDeducted)
+                                          const metrics = getInvoicePaymentMetrics(row.original)
 
                                           return (
                                             <div className="mt-2 grid gap-1.5 text-xs">
                                               <div className="flex items-center justify-between">
                                                 <span className="text-slate-500">Total Amount</span>
-                                                <span className="font-medium text-slate-900">{formatMoney(totalAmount)}</span>
+                                                <span className="font-medium text-slate-900">{formatMoney(metrics.total)}</span>
                                               </div>
                                               <div className="flex items-center justify-between">
                                                 <span className="text-slate-500">Total Paid</span>
-                                                <span className="font-medium text-slate-900">{formatMoney(totalPaid)}</span>
+                                                <span className="font-medium text-slate-900">{formatMoney(metrics.paid)}</span>
                                               </div>
                                               <div className="flex items-center justify-between">
                                                 <span className="text-slate-500">Total Deducted</span>
-                                                <span className="font-medium text-slate-900">{formatMoney(totalDeducted)}</span>
+                                                <span className="font-medium text-slate-900">{formatMoney(metrics.deducted)}</span>
                                               </div>
                                               <div className="flex items-center justify-between">
                                                 <span className="text-slate-500">Remaining</span>
-                                                <span className="font-medium text-slate-900">{formatMoney(remaining)}</span>
+                                                <span className={`font-medium ${metrics.remaining < 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+                                                  {formatMoney(metrics.remaining)}
+                                                </span>
                                               </div>
                                             </div>
                                           )
@@ -2481,23 +2818,46 @@ function InvoiceTable({
         </div>
       </div>
 
-      <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center justify-center gap-2 text-sm">
         <button
+          aria-label="Previous page"
           disabled={page <= 1 || loading}
           onClick={onPrev}
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
         >
-          Previous
+          &lt;
         </button>
-        <span className="text-slate-500">
-          Page {page}/{pages} · Total {total}
-        </span>
+        {paginationItems.map((item) => {
+          if (item === 'ellipsis-left' || item === 'ellipsis-right') {
+            return (
+              <span key={item} className="px-1 text-slate-400">
+                ...
+              </span>
+            );
+          }
+
+          return (
+            <button
+              key={item}
+              disabled={loading}
+              onClick={() => onPageJump(item)}
+              className={`rounded-lg border px-3 py-2 text-sm transition disabled:opacity-40 ${
+                item === page
+                  ? 'border-brand-300 bg-brand-50 text-brand-700'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {item}
+            </button>
+          );
+        })}
         <button
+          aria-label="Next page"
           disabled={page >= pages || loading}
           onClick={onNext}
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
         >
-          Next
+          &gt;
         </button>
       </div>
     </div>
@@ -2511,6 +2871,7 @@ function InvoiceHeader({
   activeFilter,
   setActiveFilter,
   filters,
+  routeOptions,
   setFilters,
   isFiltered,
   sortState,
@@ -2522,6 +2883,7 @@ function InvoiceHeader({
   activeFilter: InvoiceFilterKey | null;
   setActiveFilter: React.Dispatch<React.SetStateAction<InvoiceFilterKey | null>>;
   filters: InvoiceFilters;
+  routeOptions: string[];
   setFilters: React.Dispatch<React.SetStateAction<InvoiceFilters>>;
   isFiltered: boolean;
   sortState: false | 'asc' | 'desc';
@@ -2555,6 +2917,15 @@ function InvoiceHeader({
               placeholder="Shop"
               className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
               autoFocus
+            />
+          ) : null}
+          {filterKey === 'route' ? (
+            <MultiSelectDropdown
+              options={routeOptions}
+              selected={filters.route}
+              onChange={(next) => setFilterValue({ route: next })}
+              placeholder="All Routes"
+              className="w-64"
             />
           ) : null}
           {filterKey === 'date' ? (

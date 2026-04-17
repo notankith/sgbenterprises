@@ -3,17 +3,27 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
-type PaymentMode = 'cash' | 'upi' | 'cheque';
+type PaymentMode = 'cash' | 'upi' | 'cheque' | 'credit_note';
 
-function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'partial' | 'paid' | 'payable' {
+function normalizePaymentStatus(amountPaid: number, totalAmount: number, deductedAmount: number): 'unpaid' | 'partial' | 'paid' | 'payable' {
   const paid = Number(amountPaid || 0);
   const total = Number(totalAmount || 0);
-  const balance = total - paid;
+  const deducted = Number(deductedAmount || 0);
+  const balance = total - paid - deducted;
+  const epsilon = 0.01;
 
-  if (balance < 0) return 'payable';
-  if (balance === 0) return 'paid';
-  if (paid > 0) return 'partial';
+  if (Math.abs(balance) <= epsilon || Math.abs(paid + deducted - total) <= epsilon) return 'paid';
+  if (balance < -epsilon) return 'payable';
+  if (balance > epsilon && paid + deducted > epsilon) return 'partial';
   return 'unpaid';
+}
+
+function getTotalDeducted(invoice: any) {
+  if (typeof invoice?.deductedAmount === 'number') return Number(invoice.deductedAmount || 0);
+  if (Array.isArray(invoice?.deductions)) {
+    return invoice.deductions.reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+  }
+  return 0;
 }
 
 function toObjectId(id: unknown) {
@@ -37,7 +47,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'invoiceId or invoiceNumber is required' }, { status: 400 });
     }
 
-    if (!['cash', 'upi', 'cheque'].includes(mode)) {
+    if (!['cash', 'upi', 'cheque', 'credit_note'].includes(mode)) {
       return NextResponse.json({ error: 'Invalid payment mode' }, { status: 400 });
     }
 
@@ -84,8 +94,9 @@ export async function POST(req: NextRequest) {
 
     const currentPaid = Number(invoice.paidAmount || 0);
     const total = Number(invoice.totalAmount || 0);
+    const totalDeducted = getTotalDeducted(invoice);
     const nextPaid = mode === 'cheque' ? currentPaid : currentPaid + amount;
-    const paymentStatus = normalizePaymentStatus(nextPaid, total);
+    const paymentStatus = normalizePaymentStatus(nextPaid, total, totalDeducted);
 
     const historyEntry = {
       mode,

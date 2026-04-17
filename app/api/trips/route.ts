@@ -8,15 +8,25 @@ function isAssignedTrip(value: unknown) {
   return !!normalized && normalized !== 'null' && normalized !== 'undefined';
 }
 
+function getTotalDeducted(invoice: { deductedAmount?: unknown; deductions?: unknown }) {
+  if (typeof invoice.deductedAmount === 'number') return Number(invoice.deductedAmount || 0);
+  if (Array.isArray(invoice.deductions)) {
+    return invoice.deductions.reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+  }
+  return 0;
+}
+
 function hasPendingBalance(invoice: {
   paymentStatus?: unknown;
   totalAmount?: unknown;
   paidAmount?: unknown;
+  deductedAmount?: unknown;
+  deductions?: unknown;
 }) {
-  const payment = String(invoice.paymentStatus || 'unpaid').toLowerCase();
   const total = Number(invoice.totalAmount || 0);
   const paid = Number(invoice.paidAmount || 0);
-  return payment !== 'paid' && paid < total;
+  const deducted = getTotalDeducted(invoice);
+  return total - paid - deducted > 0.01;
 }
 
 export async function GET(req: NextRequest) {
@@ -76,7 +86,7 @@ export async function GET(req: NextRequest) {
       ? await db
           .collection('invoices')
           .find(invoiceFilter)
-            .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, paidAmount: 1, deductedAmount: 1, paymentStatus: 1, deliveryStatus: 1, date: 1, firm: 1, route: 1 })
+            .project({ invoiceNumber: 1, shopName: 1, totalAmount: 1, paidAmount: 1, deductedAmount: 1, deductions: 1, paymentStatus: 1, deliveryStatus: 1, date: 1, firm: 1, route: 1 })
           .toArray()
       : [];
 
@@ -97,6 +107,7 @@ export async function GET(req: NextRequest) {
             totalAmount: Number(inv.totalAmount || 0),
             paidAmount: Number(inv.paidAmount || 0),
             deductedAmount: Number(inv.deductedAmount || 0),
+            deductions: Array.isArray(inv.deductions) ? inv.deductions : [],
             paymentStatus: String(inv.paymentStatus || 'unpaid'),
             deliveryStatus: inv.deliveryStatus || 'pending',
             date: String(inv.date || ''),
@@ -104,10 +115,13 @@ export async function GET(req: NextRequest) {
             route: String(inv.route || ''),
           };
         })
-        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; paidAmount: number; deductedAmount: number; paymentStatus: string; deliveryStatus: string; date: string; firm: string; route: string }>;
+        .filter(Boolean) as Array<{ invoiceNumber: string; shopName: string; totalAmount: number; paidAmount: number; deductedAmount: number; deductions: unknown[]; paymentStatus: string; deliveryStatus: string; date: string; firm: string; route: string }>;
 
       const totalAmount = details.reduce((sum, d) => sum + Number(d.totalAmount || 0), 0);
-      const settledAndDelivered = details.length > 0 && details.every((d) => d.deliveryStatus === 'delivered' && (d.paymentStatus === 'paid' || Number(d.paidAmount || 0) >= Number(d.totalAmount || 0)));
+      const settledAndDelivered = details.length > 0 && details.every((d) => {
+        const remaining = Number(d.totalAmount || 0) - Number(d.paidAmount || 0) - getTotalDeducted(d);
+        return d.deliveryStatus === 'delivered' && remaining <= 0.01;
+      });
       const status = r.completedAt || String(r.status || '').toLowerCase() === 'complete' ? 'Complete' : 'In Progress';
 
       return {
@@ -166,6 +180,8 @@ export async function POST(req: NextRequest) {
             paymentStatus: 1,
             totalAmount: 1,
             paidAmount: 1,
+            deductedAmount: 1,
+            deductions: 1,
             assignedTripId: 1,
           })
           .toArray()
@@ -177,6 +193,8 @@ export async function POST(req: NextRequest) {
             paymentStatus: 1,
             totalAmount: 1,
             paidAmount: 1,
+            deductedAmount: 1,
+            deductions: 1,
             assignedTripId: 1,
           })
           .toArray();

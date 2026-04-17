@@ -3,9 +3,24 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongo';
 import { isLoggedInRequest } from '@/lib/auth';
 
-function normalizePaymentStatus(amountPaid: number, totalAmount: number): 'unpaid' | 'partial' | 'paid' {
-  if (totalAmount > 0 && amountPaid >= totalAmount) return 'paid';
-  if (amountPaid > 0) return 'partial';
+function getTotalDeducted(invoice: any) {
+  if (typeof invoice?.deductedAmount === 'number') return Number(invoice.deductedAmount || 0);
+  if (Array.isArray(invoice?.deductions)) {
+    return invoice.deductions.reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+  }
+  return 0;
+}
+
+function normalizePaymentStatus(amountPaid: number, totalAmount: number, deductedAmount: number): 'unpaid' | 'partial' | 'paid' | 'payable' {
+  const paid = Number(amountPaid || 0);
+  const total = Number(totalAmount || 0);
+  const deducted = Number(deductedAmount || 0);
+  const balance = total - paid - deducted;
+  const epsilon = 0.01;
+
+  if (Math.abs(balance) <= epsilon || Math.abs(paid + deducted - total) <= epsilon) return 'paid';
+  if (balance < -epsilon) return 'payable';
+  if (balance > epsilon && paid + deducted > epsilon) return 'partial';
   return 'unpaid';
 }
 
@@ -58,9 +73,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (invoice) {
         const currentPaid = Number(invoice.paidAmount || 0);
         const total = Number(invoice.totalAmount || 0);
+        const totalDeducted = getTotalDeducted(invoice);
         const isCheque = paymentRecord.mode === 'cheque';
         const newPaid = isCheque ? currentPaid : currentPaid + paymentRecord.amount;
-        const paymentStatus = normalizePaymentStatus(newPaid, total);
+        const paymentStatus = normalizePaymentStatus(newPaid, total, totalDeducted);
 
         const historyEntry = {
           mode: paymentRecord.mode,

@@ -58,6 +58,27 @@ function parseDateInput(value: string, endOfDay = false) {
   );
 }
 
+function getTotalDeducted(invoice: any) {
+  if (typeof invoice?.deductedAmount === 'number') return Number(invoice.deductedAmount || 0);
+  if (Array.isArray(invoice?.deductions)) {
+    return invoice.deductions.reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+  }
+  return 0;
+}
+
+function normalizePaymentStatus(totalAmount: number, amountPaid: number, deductedAmount: number): 'unpaid' | 'partial' | 'paid' | 'payable' {
+  const total = Number(totalAmount || 0);
+  const paid = Number(amountPaid || 0);
+  const deducted = Number(deductedAmount || 0);
+  const remaining = total - paid - deducted;
+  const epsilon = 0.01;
+
+  if (Math.abs(remaining) <= epsilon || Math.abs(paid + deducted - total) <= epsilon) return 'paid';
+  if (remaining < -epsilon) return 'payable';
+  if (remaining > epsilon && paid + deducted > epsilon) return 'partial';
+  return 'unpaid';
+}
+
 export async function GET(req: NextRequest) {
   try {
     if (!isLoggedInRequest(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -73,7 +94,15 @@ export async function GET(req: NextRequest) {
     const amountMax = searchParams.get('amountMax') || '';
     const cmpCode = String(searchParams.get('cmpCode') || '').trim().toUpperCase();
     const firm = String(searchParams.get('firm') || '').trim().toUpperCase();
-    const route = String(searchParams.get('route') || '').trim();
+    const routes = Array.from(
+      new Set(
+        searchParams
+          .getAll('route')
+          .flatMap((value) => String(value || '').split(','))
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
     const paymentStatus = searchParams.get('paymentStatus');
     const deliveryStatus = searchParams.get('deliveryStatus');
     const sortBy = String(searchParams.get('sortBy') || 'date').trim();
@@ -146,7 +175,6 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (paymentStatus) filter.paymentStatus = paymentStatus;
     if (deliveryStatus) filter.deliveryStatus = deliveryStatus;
     if (cmpCode) {
       filter.$and = [
@@ -158,7 +186,11 @@ export async function GET(req: NextRequest) {
     } else if (firm) {
       filter.firm = firm;
     }
-    if (route) filter.route = route;
+    if (routes.length === 1) {
+      filter.route = routes[0];
+    } else if (routes.length > 1) {
+      filter.route = { $in: routes };
+    }
 
     let rows = await db.collection('invoices').find(filter).toArray();
 
@@ -172,6 +204,19 @@ export async function GET(req: NextRequest) {
         if (dateToMs !== null && rowDate > dateToMs) return false;
         return true;
       });
+    }
+
+    rows = rows.map((row) => ({
+      ...row,
+      paymentStatus: normalizePaymentStatus(
+        Number(row.totalAmount || 0),
+        Number(row.paidAmount || 0),
+        getTotalDeducted(row),
+      ),
+    }));
+
+    if (paymentStatus) {
+      rows = rows.filter((row) => String(row.paymentStatus) === paymentStatus);
     }
 
     const direction = sortDirection === 'asc' ? 1 : -1;

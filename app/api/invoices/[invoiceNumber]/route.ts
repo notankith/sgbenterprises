@@ -28,12 +28,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ in
   }
 
   if (body.deliveryStatus) {
+    const deliveryStatus = String(body.deliveryStatus || '').trim().toLowerCase();
+    if (!['delivered', 'pending'].includes(deliveryStatus)) {
+      return NextResponse.json({ error: 'deliveryStatus must be delivered or pending' }, { status: 400 });
+    }
+
+    const deliveryPerson = typeof body.deliveryPerson === 'string' ? body.deliveryPerson.trim() : '';
+    if (deliveryStatus === 'delivered' && !deliveryPerson) {
+      return NextResponse.json({ error: 'deliveryPerson is required when marking delivered' }, { status: 400 });
+    }
+
     const update: Record<string, any> = {
-      deliveryStatus: body.deliveryStatus,
-      deliveryPerson: body.deliveryPerson || null,
+      deliveryStatus,
+      deliveryPerson: deliveryStatus === 'delivered' ? deliveryPerson : null,
     };
-    if (body.deliveryStatus === 'delivered') {
+    if (deliveryStatus === 'delivered') {
       update.deliveredAt = new Date().toISOString();
+    } else {
+      update.deliveredAt = null;
     }
     if (agentId) update.assignedAgentId = body.agentId;
 

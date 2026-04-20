@@ -136,6 +136,7 @@ type TripInvoice = {
   deductedAmount?: number;
   paymentStatus?: string;
   deliveryStatus: string;
+  route?: string;
 };
 
 type TripSheet = {
@@ -197,6 +198,41 @@ function statusBadgeClass(status: string) {
   if (status === 'payable') return 'bg-orange-50 text-orange-700 border-orange-200';
   if (status === 'delivered') return 'bg-sky-50 text-sky-700 border-sky-200';
   return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function normalizeTripDeliveryStatus(status: unknown) {
+  return String(status || '').trim().toLowerCase() === 'delivered' ? 'delivered' : 'undelivered';
+}
+
+function normalizeTripPaymentStatus(status: unknown) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'paid' || normalized === 'payable') return 'paid';
+  if (normalized === 'partial') return 'partial';
+  return 'unpaid';
+}
+
+function tripDeliveryCode(status: unknown) {
+  return normalizeTripDeliveryStatus(status) === 'delivered' ? 'D' : 'ND';
+}
+
+function tripPaymentLabel(status: unknown) {
+  const normalized = normalizeTripPaymentStatus(status);
+  if (normalized === 'paid') return 'Paid';
+  if (normalized === 'partial') return 'Partial';
+  return 'Unpaid';
+}
+
+function tripDeliveryBadgeClass(status: unknown) {
+  return normalizeTripDeliveryStatus(status) === 'delivered'
+    ? 'border-sky-200 bg-sky-50 text-sky-700'
+    : 'border-slate-200 bg-slate-100 text-slate-700';
+}
+
+function tripPaymentBadgeClass(status: unknown) {
+  const normalized = normalizeTripPaymentStatus(status);
+  if (normalized === 'paid') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (normalized === 'partial') return 'border-amber-200 bg-amber-50 text-amber-700';
+  return 'border-rose-200 bg-rose-50 text-rose-700';
 }
 
 function getTotalDeducted(invoice: Pick<InvoiceRow, 'deductedAmount' | 'deductions'>) {
@@ -423,6 +459,8 @@ export default function LogisticsApp() {
   const [pendingPool, setPendingPool] = useState<InvoiceRow[]>([]);
   const [tripSelected, setTripSelected] = useState<string[]>([]);
   const [tripSearch, setTripSearch] = useState('');
+  const [tripDeliveryFilters, setTripDeliveryFilters] = useState<string[]>([]);
+  const [tripPaymentFilters, setTripPaymentFilters] = useState<string[]>([]);
   const [tripRouteFilters, setTripRouteFilters] = useState<string[]>([]);
   const [expandedTrip, setExpandedTrip] = useState<string | null>(null);
   const [tripFilters, setTripFilters] = useState({
@@ -450,6 +488,12 @@ export default function LogisticsApp() {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteModalInvoice, setNoteModalInvoice] = useState<InvoiceRow | null>(null);
   const [noteForm, setNoteForm] = useState({ content: '', addedBy: 'Admin' });
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
+  const [deliveryModalInvoice, setDeliveryModalInvoice] = useState<InvoiceRow | null>(null);
+  const [deliveryForm, setDeliveryForm] = useState({
+    deliveryPerson: '',
+  });
+  const [deliveryFormError, setDeliveryFormError] = useState('');
 
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
   const [chequeFilters, setChequeFilters] = useState({
@@ -491,13 +535,20 @@ export default function LogisticsApp() {
   const filteredPendingPool = useMemo(() => {
     const q = debouncedTripSearch.trim().toLowerCase();
     const selectedRoutes = new Set(tripRouteFilters.map((x) => x.toLowerCase()));
+    const selectedDeliveryStatuses = new Set(tripDeliveryFilters.map((x) => x.toLowerCase()));
+    const selectedPaymentStatuses = new Set(tripPaymentFilters.map((x) => x.toLowerCase()));
+
     return pendingPool.filter((row) => {
       const bySearch = !q || row.invoiceNumber.toLowerCase().includes(q) || row.shopName.toLowerCase().includes(q);
       const routeValue = String(row.route || '').trim().toLowerCase();
+      const deliveryStatusValue = normalizeTripDeliveryStatus(row.deliveryStatus);
+      const paymentStatusValue = normalizeTripPaymentStatus(row.paymentStatus);
       const byRoute = selectedRoutes.size === 0 || selectedRoutes.has(routeValue);
-      return bySearch && byRoute;
+      const byDelivery = selectedDeliveryStatuses.size === 0 || selectedDeliveryStatuses.has(deliveryStatusValue);
+      const byPayment = selectedPaymentStatuses.size === 0 || selectedPaymentStatuses.has(paymentStatusValue);
+      return bySearch && byRoute && byDelivery && byPayment;
     });
-  }, [pendingPool, debouncedTripSearch, tripRouteFilters]);
+  }, [pendingPool, debouncedTripSearch, tripRouteFilters, tripDeliveryFilters, tripPaymentFilters]);
 
   const filteredTripHistory = useMemo(() => {
     const selectedAgent = agents.find((a) => a._id === selectedAgentId);
@@ -681,11 +732,17 @@ export default function LogisticsApp() {
   }
 
   async function loadPendingPool() {
-    const params = new URLSearchParams({ page: '1', pageSize: '5000', deliveryStatus: 'pending' });
+    const params = new URLSearchParams({ page: '1', pageSize: '5000' });
     const data = await fetchJson(`/api/invoices?${params.toString()}`);
     setPendingPool(
       (data.rows || []).filter(
-        (r: InvoiceRow) => !r.assignedTripId && (r.paymentStatus === 'unpaid' || r.paymentStatus === 'partial'),
+        (r: InvoiceRow) => {
+          const metrics = getInvoicePaymentMetrics(r);
+          const hasPendingBalance = metrics.remaining > 0.01;
+          const undelivered = normalizeTripDeliveryStatus(r.deliveryStatus) === 'undelivered';
+          const unassigned = !String(r.assignedTripId || '').trim();
+          return (undelivered && unassigned) || hasPendingBalance;
+        },
       ),
     );
   }
@@ -1005,6 +1062,132 @@ export default function LogisticsApp() {
     setTripSelected(merged);
   }
 
+  function clearTripSelectionFilters() {
+    setTripSearch('');
+    setTripDeliveryFilters([]);
+    setTripPaymentFilters([]);
+    setTripRouteFilters([]);
+  }
+
+  function applyLocalInvoiceDeliveryUpdate(
+    invoiceNumber: string,
+    nextDeliveryStatus: InvoiceRow['deliveryStatus'],
+    nextDeliveryPerson: string | null,
+    deliveredAt?: string,
+  ) {
+    const nextDeliveredAt = nextDeliveryStatus === 'delivered' ? deliveredAt || new Date().toISOString() : undefined;
+
+    setInvoiceRows((prev) =>
+      prev.map((row) =>
+        row.invoiceNumber === invoiceNumber
+          ? {
+              ...row,
+              deliveryStatus: nextDeliveryStatus,
+              deliveryPerson: nextDeliveryPerson,
+              deliveredAt: nextDeliveredAt,
+              deliveredDate: nextDeliveredAt,
+            }
+          : row,
+      ),
+    );
+
+    setPendingPool((prev) =>
+      prev.map((row) =>
+        row.invoiceNumber === invoiceNumber
+          ? {
+              ...row,
+              deliveryStatus: nextDeliveryStatus,
+              deliveryPerson: nextDeliveryPerson,
+              deliveredAt: nextDeliveredAt,
+              deliveredDate: nextDeliveredAt,
+            }
+          : row,
+      ),
+    );
+
+    setTripSheets((prev) =>
+      prev.map((trip) => ({
+        ...trip,
+        invoices: trip.invoices.map((invoice) =>
+          invoice.invoiceNumber === invoiceNumber
+            ? {
+                ...invoice,
+                deliveryStatus: nextDeliveryStatus,
+              }
+            : invoice,
+        ),
+      })),
+    );
+  }
+
+  async function updateInvoiceDeliveryStatus(
+    invoice: InvoiceRow,
+    nextDeliveryStatus: InvoiceRow['deliveryStatus'],
+    deliveryPerson?: string | null,
+  ) {
+    const normalizedDeliveryPerson = nextDeliveryStatus === 'delivered'
+      ? String(deliveryPerson || '').trim()
+      : null;
+
+    if (nextDeliveryStatus === 'delivered' && !normalizedDeliveryPerson) {
+      setDeliveryFormError('Delivery Person Name is required.');
+      return false;
+    }
+
+    const deliveredAt = nextDeliveryStatus === 'delivered' ? new Date().toISOString() : undefined;
+    applyLocalInvoiceDeliveryUpdate(invoice.invoiceNumber, nextDeliveryStatus, normalizedDeliveryPerson, deliveredAt);
+
+    try {
+      await fetchJson(`/api/invoices/${encodeURIComponent(invoice.invoiceNumber)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoiceId: invoice._id,
+          deliveryStatus: nextDeliveryStatus,
+          deliveryPerson: normalizedDeliveryPerson,
+        }),
+      });
+    } catch (error) {
+      await Promise.all([loadInvoices(invoicePage), loadTripSheets(), loadPendingPool()]);
+      throw error;
+    }
+
+    await Promise.all([loadInvoices(invoicePage), loadTripSheets(), loadPendingPool(), loadSummary()]);
+    return true;
+  }
+
+  function openDeliveryModal(invoice: InvoiceRow) {
+    setDeliveryModalInvoice(invoice);
+    setDeliveryForm({
+      deliveryPerson: String(invoice.deliveryPerson || '').trim(),
+    });
+    setDeliveryFormError('');
+    setShowDeliveryModal(true);
+  }
+
+  function requestDeliveryStatusUpdate(invoice: InvoiceRow) {
+    if (invoice.deliveryStatus === 'delivered') {
+      runAction(`undeliver-${invoice._id}`, async () => {
+        await updateInvoiceDeliveryStatus(invoice, 'pending', null);
+      }).catch((e) =>
+        setApiError(e instanceof Error ? e.message : 'Failed to update delivery status'),
+      );
+      return;
+    }
+
+    openDeliveryModal(invoice);
+  }
+
+  async function submitDeliveredStatusUpdate() {
+    if (!deliveryModalInvoice) return;
+    const updated = await updateInvoiceDeliveryStatus(deliveryModalInvoice, 'delivered', deliveryForm.deliveryPerson);
+    if (!updated) return;
+    setShowDeliveryModal(false);
+    setDeliveryModalInvoice(null);
+    setDeliveryForm({ deliveryPerson: '' });
+    setDeliveryFormError('');
+  }
+
   async function approveItem(id: string, withRefresh = true) {
     await fetchJson(`/api/approvals/${id}/approve`, { method: 'POST' });
     if (withRefresh) {
@@ -1151,6 +1334,12 @@ export default function LogisticsApp() {
       invoiceFilters.deliveryStatus ||
       invoiceFilters.paymentStatus,
   );
+  const hasTripSelectionFilters = Boolean(
+    tripSearch.trim() ||
+      tripRouteFilters.length ||
+      tripDeliveryFilters.length ||
+      tripPaymentFilters.length,
+  );
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -1161,8 +1350,8 @@ export default function LogisticsApp() {
               <LayoutDashboard className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-slate-900">Logistics</p>
-              <p className="text-xs text-slate-500">Internal Console</p>
+              <p className="text-sm font-semibold text-slate-900">Internal Dashboard</p>
+              <p className="text-xs text-slate-500">SGB Enterprises</p>
             </div>
           </div>
 
@@ -1212,14 +1401,16 @@ export default function LogisticsApp() {
                 <UserCircle className="h-4 w-4" />
                 Admin
               </div>
-              <button
-                onClick={resetInvoiceFilters}
-                disabled={activeTab !== 'invoices' || !hasInvoiceFilters}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100"
-              >
-                <FilterX className="h-4 w-4" />
-                Reset Filters
-              </button>
+              {activeTab === 'invoices' ? (
+                <button
+                  onClick={resetInvoiceFilters}
+                  disabled={!hasInvoiceFilters}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <FilterX className="h-4 w-4" />
+                  Reset Filters
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -1331,6 +1522,7 @@ export default function LogisticsApp() {
               onAddPayment={openPaymentModal}
               onAddNote={openNoteModal}
               onArchive={archiveInvoice}
+              onDeliveryStatusAction={requestDeliveryStatusUpdate}
             />
           ) : null}
 
@@ -1649,10 +1841,10 @@ export default function LogisticsApp() {
                   </div>
                 </div>
 
-                <div className="card p-5">
+                <div className="card min-w-0 overflow-hidden p-5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-semibold text-slate-900">
                         {selectedAgent ? `${selectedAgent.name} · Trip sheets` : 'Select a delivery agent'}
                       </h3>
                       <p className="text-xs text-slate-500">Manage new and past assignments.</p>
@@ -1675,7 +1867,7 @@ export default function LogisticsApp() {
 
                   {tripsSubTab === 'new' ? (
                     <div className="mt-4 space-y-3">
-                      <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_240px_auto_auto]">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_170px_170px_200px_auto_auto]">
                         <input
                           value={tripSearch}
                           onChange={(e) => setTripSearch(e.target.value)}
@@ -1683,22 +1875,35 @@ export default function LogisticsApp() {
                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100"
                         />
                         <MultiSelectDropdown
+                          options={['Delivered', 'Undelivered']}
+                          selected={tripDeliveryFilters}
+                          onChange={setTripDeliveryFilters}
+                          placeholder="Delivery Status"
+                        />
+                        <MultiSelectDropdown
+                          options={['Paid', 'Partial', 'Unpaid']}
+                          selected={tripPaymentFilters}
+                          onChange={setTripPaymentFilters}
+                          placeholder="Payment Status"
+                        />
+                        <MultiSelectDropdown
                           options={availableRoutes}
                           selected={tripRouteFilters}
                           onChange={setTripRouteFilters}
-                          placeholder="All Routes"
+                          placeholder="Route"
                         />
                         <button
                           onClick={() => selectVisibleTrips(true)}
-                          className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100 xl:w-auto"
                         >
-                          Select visible
+                          Select Visible
                         </button>
                         <button
-                          onClick={() => selectVisibleTrips(false)}
-                          className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 transition hover:bg-slate-100"
+                          onClick={clearTripSelectionFilters}
+                          disabled={!hasTripSelectionFilters}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100 disabled:opacity-50 xl:w-auto"
                         >
-                          Clear visible
+                          Clear Filters
                         </button>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -1722,7 +1927,7 @@ export default function LogisticsApp() {
 
                       <div className="max-h-[480px] overflow-auto rounded-lg border border-slate-200">
                         {filteredPendingPool.map((r) => (
-                          <label key={r._id} className="flex items-center gap-3 border-b border-slate-200 px-4 py-3 text-sm hover:bg-slate-50">
+                          <label key={r._id} className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-3 text-sm hover:bg-slate-50">
                             <input
                               type="checkbox"
                               checked={tripSelected.includes(r._id)}
@@ -1732,14 +1937,25 @@ export default function LogisticsApp() {
                                 )
                               }
                             />
-                            <div>
+                            <div className="min-w-0">
                               <p className="font-medium text-slate-900">{r.invoiceNumber}</p>
                               <p className="text-xs text-slate-500">{r.shopName}</p>
+                              <p className="text-[11px] text-slate-500">Route: {r.route || '-'}</p>
                             </div>
-                            <span className="ml-auto text-sm text-slate-600">{formatMoney(r.totalAmount)}</span>
+                            <div className="flex flex-wrap items-center gap-2 text-xs sm:ml-auto sm:justify-end">
+                              <span className={`rounded-md border px-2 py-1 font-medium ${tripDeliveryBadgeClass(r.deliveryStatus)}`}>
+                                Delivery: {tripDeliveryCode(r.deliveryStatus)}
+                              </span>
+                              <span className={`rounded-md border px-2 py-1 font-medium ${tripPaymentBadgeClass(r.paymentStatus)}`}>
+                                Payment: {tripPaymentLabel(r.paymentStatus)}
+                              </span>
+                              <span className="rounded-md border border-slate-200 bg-white px-2 py-1 font-medium text-slate-700">
+                                {formatMoney(r.totalAmount)}
+                              </span>
+                            </div>
                           </label>
                         ))}
-                        {!filteredPendingPool.length ? <p className="p-4 text-sm text-slate-500">No matching pending invoices.</p> : null}
+                        {!filteredPendingPool.length ? <p className="p-4 text-sm text-slate-500">No invoices match current filters.</p> : null}
                       </div>
                     </div>
                   ) : (
@@ -1810,9 +2026,17 @@ export default function LogisticsApp() {
                                         <div>
                                           <p className="font-medium text-slate-900">{inv.invoiceNumber}</p>
                                           <p className="text-xs text-slate-500">{inv.shopName}</p>
+                                          <p className="text-[11px] text-slate-500">Route: {inv.route || '-'}</p>
                                         </div>
                                         <div className="flex flex-col items-end gap-1 text-[11px] text-slate-600">
-                                          <Badge className={statusBadgeClass(inv.deliveryStatus)}>{inv.deliveryStatus}</Badge>
+                                          <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <span className={`rounded-md border px-2 py-1 font-medium ${tripDeliveryBadgeClass(inv.deliveryStatus)}`}>
+                                              Delivery: {tripDeliveryCode(inv.deliveryStatus)}
+                                            </span>
+                                            <span className={`rounded-md border px-2 py-1 font-medium ${tripPaymentBadgeClass(inv.paymentStatus)}`}>
+                                              Payment: {tripPaymentLabel(inv.paymentStatus)}
+                                            </span>
+                                          </div>
                                           <div className="flex items-center gap-2">
                                             <span>Actual: <span className="font-medium text-slate-900">{formatMoney(Number(inv.totalAmount || 0))}</span></span>
                                             <span>Received: <span className="font-medium text-emerald-700">{formatMoney(Number(inv.paidAmount || 0))}</span></span>
@@ -2234,6 +2458,56 @@ export default function LogisticsApp() {
             </div>
           ) : null}
 
+          {showDeliveryModal && deliveryModalInvoice ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+              <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-panel">
+                <h3 className="text-sm font-semibold text-slate-900">Mark Invoice as Delivered</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Invoice {deliveryModalInvoice.invoiceNumber} · {deliveryModalInvoice.shopName}
+                </p>
+
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600">Delivery Person Name</label>
+                    <input
+                      value={deliveryForm.deliveryPerson}
+                      onChange={(e) => {
+                        setDeliveryForm((prev) => ({ ...prev, deliveryPerson: e.target.value }));
+                        if (deliveryFormError) setDeliveryFormError('');
+                      }}
+                      placeholder="Enter delivery person name"
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                {deliveryFormError ? <p className="mt-3 text-xs text-rose-700">{deliveryFormError}</p> : null}
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setShowDeliveryModal(false);
+                      setDeliveryModalInvoice(null);
+                      setDeliveryForm({ deliveryPerson: '' });
+                      setDeliveryFormError('');
+                    }}
+                    disabled={isActionLoading('save-delivery-status')}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => runAction('save-delivery-status', async () => submitDeliveredStatusUpdate()).catch((e) => setApiError(e instanceof Error ? e.message : 'Failed to update delivery status'))}
+                    disabled={isActionLoading('save-delivery-status')}
+                    className="rounded-lg bg-brand-500 px-4 py-2 text-xs font-medium text-white"
+                  >
+                    {isActionLoading('save-delivery-status') ? 'Saving...' : 'Save Delivery Status'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           {showPaymentModal && paymentModalInvoice ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
               <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-5 shadow-panel">
@@ -2409,6 +2683,7 @@ function InvoiceTable({
   onAddPayment,
   onAddNote,
   onArchive,
+  onDeliveryStatusAction,
 }: {
   rows: InvoiceRow[];
   loading: boolean;
@@ -2431,6 +2706,7 @@ function InvoiceTable({
   onAddPayment: (invoice: InvoiceRow) => void;
   onAddNote: (invoice: InvoiceRow) => void;
   onArchive: (invoice: InvoiceRow) => void;
+  onDeliveryStatusAction: (invoice: InvoiceRow) => void;
 }) {
   const sorting = useMemo<SortingState>(
     () => [{ id: sortBy, desc: sortDirection === 'desc' }],
@@ -2781,6 +3057,19 @@ function InvoiceTable({
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
+                                        onDeliveryStatusAction(row.original);
+                                      }}
+                                      className={`rounded-lg border px-3 py-2 text-xs transition hover:bg-slate-100 ${
+                                        row.original.deliveryStatus === 'delivered'
+                                          ? 'border-slate-200 text-slate-600'
+                                          : 'border-sky-200 bg-sky-50 text-sky-700'
+                                      }`}
+                                    >
+                                      {row.original.deliveryStatus === 'delivered' ? 'Mark undelivered' : 'Mark delivered'}
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         onAddPayment(row.original);
                                       }}
                                       className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:bg-slate-100"
@@ -2969,7 +3258,7 @@ function InvoiceHeader({
             >
               <option value="">All</option>
               <option value="delivered">Delivered</option>
-              <option value="pending">Pending</option>
+              <option value="pending">Undelivered</option>
             </select>
           ) : null}
           {filterKey === 'paymentStatus' ? (

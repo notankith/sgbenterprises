@@ -1,8 +1,7 @@
 import { isLoggedInServerComponent } from '@/lib/auth';
-import LogisticsApp from '@/components/logistics-app';
-import LoginForm from '@/components/login-form';
+import ClientHome from '@/components/client-home';
 
 export default async function HomePage() {
   const loggedIn = await isLoggedInServerComponent();
-  return loggedIn ? <LogisticsApp /> : <LoginForm />;
+  return <ClientHome loggedIn={loggedIn} />;
 }

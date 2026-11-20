@@ -10,7 +10,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   AlertCircle,
   AlertTriangle,
@@ -73,7 +73,22 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { ThemeSettingsPopover } from '@/components/theme-provider';
+import { GlassDateInput, GlassPopover, CalendarView, formatDisplayDate, toIsoDate } from '@/components/glass-popover';
+import { StatusChip } from '@/components/status-chip';
+import { ApprovalConfirmPopover } from '@/components/approval-slider';
+import {
+  FloatingTopBar,
+  DashboardFilterRow,
+  HeroStatCards,
+  MainWorkspaceSection,
+  ChartBilledVsCollected,
+  ChartPaymentStatus,
+  ChartReceivablesAging,
+  ChartOutstandingByRoute,
+  ChartChequePipeline,
+  ChartNeedsAttention,
+  DashboardStats,
+} from '@/components/dashboard-redesign';
 
 type TabKey = 'dashboard' | 'invoices' | 'importExport' | 'trips' | 'approvals' | 'cheques' | 'expenses';
 type TripsSubTab = 'new' | 'past';
@@ -235,13 +250,13 @@ function formatDateTime(value?: string) {
 
 function statusBadgeClass(status: string) {
   const s = String(status || '').toLowerCase();
-  if (s === 'paid') return 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300';
-  if (s === 'partial') return 'border-amber-400/25 bg-amber-400/12 text-amber-300';
-  if (s === 'unpaid') return 'border-rose-400/25 bg-rose-400/12 text-rose-300';
-  if (s === 'payable') return 'border-orange-400/25 bg-orange-400/12 text-orange-300';
-  if (s === 'delivered') return 'border-sky-400/25 bg-sky-400/12 text-sky-300';
-  if (s === 'complete') return 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300';
-  return 'border-white/[0.08] bg-white/[0.04] text-white/70';
+  if (s === 'paid' || s === 'optimal' || s === 'system healthy') return 'bg-emerald-500/12 text-emerald-400';
+  if (s === 'partial' || s === 'in transit' || s === 'transit') return 'bg-amber-500/12 text-amber-400';
+  if (s === 'unpaid' || s === 'delayed') return 'bg-rose-500/12 text-rose-400';
+  if (s === 'payable') return 'bg-orange-500/12 text-orange-400';
+  if (s === 'delivered') return 'bg-emerald-500/12 text-emerald-400';
+  if (s === 'complete') return 'bg-emerald-500/12 text-emerald-400';
+  return 'bg-white/[0.06] text-[var(--text-2)]';
 }
 
 function normalizeTripDeliveryStatus(status: unknown) {
@@ -317,75 +332,106 @@ function useDebouncedValue<T>(value: T, delay = 350) {
   return debounced;
 }
 
+function CountUpValue({ value }: { value: string }) {
+  const shouldReduceMotion = useReducedMotion();
+  const [displayValue, setDisplayValue] = useState<string>(value);
+
+  useEffect(() => {
+    if (shouldReduceMotion) {
+      setDisplayValue(value);
+      return;
+    }
+
+    const match = value.match(/(-?[\d,]+(\.\d+)?)/);
+    if (!match) {
+      setDisplayValue(value);
+      return;
+    }
+
+    const matchedStr = match[0];
+    const rawNumStr = matchedStr.replace(/,/g, '');
+    const target = parseFloat(rawNumStr);
+    if (isNaN(target)) {
+      setDisplayValue(value);
+      return;
+    }
+
+    const prefix = value.slice(0, match.index);
+    const suffix = value.slice((match.index ?? 0) + matchedStr.length);
+    const duration = 800;
+    const startTime = performance.now();
+
+    let animationFrame: number;
+
+    const tick = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Ease-out cubic: 1 - (1 - progress)^3
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      if (progress < 1) {
+        const currentNum = Math.round(target * easeProgress);
+        const formattedNum = currentNum.toLocaleString('en-IN');
+        setDisplayValue(`${prefix}${formattedNum}${suffix}`);
+        animationFrame = requestAnimationFrame(tick);
+      } else {
+        // Final value MUST equal the real value exactly
+        setDisplayValue(value);
+      }
+    };
+
+    animationFrame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [value, shouldReduceMotion]);
+
+  return <>{displayValue}</>;
+}
+
 function StatCard({
   label,
   value,
   subtext,
-  icon: Icon,
-  variant = 'default',
+  icon: _Icon,
+  index = 0,
 }: {
   label: string;
   value: string;
   subtext?: string;
-  icon: typeof LayoutDashboard;
+  icon?: typeof LayoutDashboard;
   variant?: 'default' | 'success' | 'warning' | 'danger' | 'info';
+  index?: number;
 }) {
-  const variantStyles = {
-    default: {
-      bg: 'bg-white/[0.045]',
-      border: 'border-white/[0.08]',
-      iconBox: 'bg-white/[0.05] text-white/70 border border-white/[0.08] backdrop-blur-md',
-      text: 'text-white/95',
-    },
-    success: {
-      bg: 'bg-white/[0.045]',
-      border: 'border-emerald-400/25',
-      iconBox: 'bg-emerald-400/12 text-emerald-300 border border-emerald-400/25 backdrop-blur-md',
-      text: 'text-white/95',
-    },
-    warning: {
-      bg: 'bg-white/[0.045]',
-      border: 'border-amber-400/25',
-      iconBox: 'bg-amber-400/12 text-amber-300 border border-amber-400/25 backdrop-blur-md',
-      text: 'text-white/95',
-    },
-    danger: {
-      bg: 'bg-white/[0.045]',
-      border: 'border-rose-400/25',
-      iconBox: 'bg-rose-400/12 text-rose-300 border border-rose-400/25 backdrop-blur-md',
-      text: 'text-white/95',
-    },
-    info: {
-      bg: 'bg-white/[0.045]',
-      border: 'border-sky-400/25',
-      iconBox: 'bg-sky-400/12 text-sky-300 border border-sky-400/25 backdrop-blur-md',
-      text: 'text-white/95',
-    },
-  }[variant];
+  const shouldReduceMotion = useReducedMotion();
 
   return (
-    <div className={`card relative overflow-hidden rounded-[20px] p-4 sm:p-5 transition-all duration-200 hover:-translate-y-0.5 ${variantStyles.border} ${variantStyles.bg}`}>
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-white/50">{label}</p>
-        <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${variantStyles.iconBox}`}>
-          <Icon className="h-[18px] w-[18px]" strokeWidth={1.5} />
-        </div>
+    <motion.div
+      initial={shouldReduceMotion ? false : { opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{
+        duration: shouldReduceMotion ? 0.15 : 0.45,
+        delay: shouldReduceMotion ? 0 : index * 0.06,
+        ease: [0.22, 1, 0.36, 1],
+      }}
+      className="rounded-[16px] p-5 glass-card shadow-glass transition duration-200"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[13px] font-normal text-[var(--text-2)] truncate">{label}</p>
       </div>
-      <p className={`mt-2 text-2xl font-medium tracking-tight num-tabular ${variantStyles.text}`}>
-        {value}
+      <p className="mt-1 text-[28px] font-sans font-medium tracking-[-0.02em] [font-variant-numeric:lining-nums_tabular-nums] text-[var(--text-1)] leading-tight">
+        <CountUpValue value={value} />
       </p>
       {subtext && (
-        <p className="mt-1 text-[11px] font-normal text-white/50">
+        <p className="mt-1 text-[13px] font-normal text-[var(--text-2)] truncate">
           {subtext}
         </p>
       )}
-    </div>
+    </motion.div>
   );
 }
 
 function CardSkeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <div className="card rounded-[20px] p-5">
+    <div className="card rounded-[24px] p-5 border border-white/[0.12] bg-[rgba(10,20,14,0.45)] backdrop-blur-[24px]">
       <div className="skeleton h-4 w-40" />
       <div className="mt-4 space-y-2.5">
         {Array.from({ length: rows }).map((_, index) => (
@@ -455,7 +501,7 @@ function MultiSelectDropdown({
               <button
                 type="button"
                 onClick={() => onChange([])}
-                className="text-[11px] font-normal text-indigo-400 hover:text-indigo-300"
+                className="text-[11px] font-normal text-[var(--accent-solid)] hover:opacity-80"
               >
                 Clear all
               </button>
@@ -479,7 +525,7 @@ function MultiSelectDropdown({
                           onChange([...selected, option]);
                         }
                       }}
-                      className="rounded border-white/20 bg-white/10 text-indigo-500 focus:ring-indigo-400"
+                      className="rounded border-white/20 bg-white/10 accent-[var(--accent-solid)] focus:ring-[var(--accent-solid)]"
                     />
                     <span className="truncate">{option}</span>
                   </label>
@@ -495,219 +541,10 @@ function MultiSelectDropdown({
   );
 }
 
-function SidebarNav({
-  activeTab,
-  setActiveTab,
-  onCloseMobile,
-  pendingApprovalsCount,
-  pendingChequesCount,
-  invoicesCount,
-  tripsCount,
-  refreshAll,
-  pageLoading,
-  logout,
-  onOpenTheme,
-}: {
-  activeTab: TabKey;
-  setActiveTab: (tab: TabKey) => void;
-  onCloseMobile?: () => void;
-  pendingApprovalsCount: number;
-  pendingChequesCount: number;
-  invoicesCount: number;
-  tripsCount: number;
-  refreshAll: () => Promise<void>;
-  pageLoading: boolean;
-  logout: () => Promise<void>;
-  onOpenTheme?: (el: HTMLElement) => void;
-}) {
-  const sections = [
-    {
-      title: 'OVERVIEW',
-      items: [
-        { key: 'dashboard' as TabKey, label: 'Dashboard', icon: BarChart3 },
-      ],
-    },
-    {
-      title: 'OPERATIONS',
-      items: [
-        { key: 'invoices' as TabKey, label: 'Invoices', icon: Receipt, badge: invoicesCount > 0 ? invoicesCount : undefined, badgeColor: 'slate' },
-        { key: 'trips' as TabKey, label: 'Trip Sheets', icon: Route, badge: tripsCount > 0 ? tripsCount : undefined, badgeColor: 'slate' },
-        { key: 'importExport' as TabKey, label: 'Import / Export', icon: ArrowDownUp },
-      ],
-    },
-    {
-      title: 'FINANCE & AUDIT',
-      items: [
-        {
-          key: 'approvals' as TabKey,
-          label: 'Approvals',
-          icon: ShieldCheck,
-          badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : undefined,
-          badgeColor: 'amber',
-        },
-        {
-          key: 'cheques' as TabKey,
-          label: 'Cheques',
-          icon: Landmark,
-          badge: pendingChequesCount > 0 ? pendingChequesCount : undefined,
-          badgeColor: 'blue',
-        },
-        { key: 'expenses' as TabKey, label: 'Expenses', icon: Wallet },
-      ],
-    },
-  ];
-
-  return (
-    <div className="flex h-full flex-col justify-between overflow-y-auto p-4 text-white/80">
-      <div>
-        {/* Brand Header */}
-        <div className="flex items-center gap-3 border-b border-white/[0.06] pb-4 pt-1">
-          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.05] p-1.5 shadow-inner backdrop-blur-md">
-            <Image
-              src="/sgb.png"
-              alt="SGB Logo"
-              width={36}
-              height={36}
-              className="object-contain"
-            />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="truncate text-xs font-medium tracking-wider text-white/95 uppercase">
-                SGB Enterprises
-              </span>
-            </div>
-            <p className="truncate text-[10px] font-normal text-white/50">Logistics & Fleet Console</p>
-          </div>
-          {onCloseMobile && (
-            <button
-              onClick={onCloseMobile}
-              className="rounded-lg p-1.5 text-white/50 hover:bg-white/[0.06] hover:text-white lg:hidden"
-              aria-label="Close menu"
-            >
-              <X className="h-4 w-4" strokeWidth={1.5} />
-            </button>
-          )}
-        </div>
-
-        {/* Live Status Pill */}
-        <div className="mt-3 flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.03] px-2.5 py-1.5 text-[10px] backdrop-blur-md">
-          <div className="flex items-center gap-1.5 text-emerald-400">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-            </span>
-            <span className="font-medium tracking-wide">ONLINE SYSTEM</span>
-          </div>
-          <span className="num-tabular font-normal text-white/45">v2.4 Prod</span>
-        </div>
-
-        {/* Navigation Groups */}
-        <nav className="mt-5 space-y-4">
-          {sections.map((sec) => (
-            <div key={sec.title}>
-              <p className="px-2 pb-1 text-[11px] font-medium tracking-[0.08em] text-white/45 uppercase">
-                {sec.title}
-              </p>
-              <div className="space-y-1">
-                {sec.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.key;
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => {
-                        setActiveTab(item.key);
-                        if (onCloseMobile) onCloseMobile();
-                      }}
-                      className={`group flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-xs font-normal transition ${
-                        isActive
-                          ? 'border border-indigo-400/35 bg-indigo-500/18 text-white/95 shadow-[0_0_12px_rgba(99,102,241,0.2)]'
-                          : 'text-white/60 hover:bg-white/[0.05] hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Icon
-                          className={`h-4 w-4 shrink-0 transition ${
-                            isActive ? 'text-indigo-300' : 'text-white/50 group-hover:text-white/80'
-                          }`}
-                          strokeWidth={1.5}
-                        />
-                        <span className="truncate">{item.label}</span>
-                      </div>
-                      {typeof item.badge === 'number' && item.badge > 0 && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium num-tabular ${
-                            item.badgeColor === 'amber'
-                              ? 'border border-amber-400/25 bg-amber-400/12 text-amber-300 animate-pulse'
-                              : item.badgeColor === 'blue'
-                              ? 'border border-sky-400/25 bg-sky-400/12 text-sky-300'
-                              : 'border border-white/[0.08] bg-white/[0.08] text-white/80'
-                          }`}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-      </div>
-
-      {/* Sidebar Footer */}
-      <div className="mt-6 border-t border-white/[0.06] pt-4 space-y-3">
-        {/* Quick Sync & Theme Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={refreshAll}
-            disabled={pageLoading}
-            className="glass-btn flex-1 flex items-center justify-center gap-2 py-2 text-xs font-medium disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${pageLoading ? 'animate-spin text-indigo-400' : 'text-white/50'}`} strokeWidth={1.5} />
-            <span>{pageLoading ? 'Synchronizing...' : 'Sync Console'}</span>
-          </button>
-          {onOpenTheme && (
-            <button
-              onClick={(e) => onOpenTheme(e.currentTarget)}
-              title="Theme Settings"
-              aria-label="Theme Settings"
-              className="glass-btn flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white/70 hover:text-white shadow-sm"
-            >
-              <Palette className="h-4 w-4" strokeWidth={1.5} />
-            </button>
-          )}
-        </div>
-
-        {/* User Card & Logout */}
-        <div className="glass-row flex items-center justify-between p-2.5 rounded-xl">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-indigo-400/30 bg-indigo-500/25 text-xs font-medium text-white shadow-sm">
-              AD
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-white/92">Administrator</p>
-              <p className="truncate text-[10px] font-normal text-white/50">Operations Root</p>
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            title="Log out of console"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-white/45 transition hover:bg-rose-500/15 hover:text-rose-300"
-          >
-            <LogOut className="h-3.5 w-3.5" strokeWidth={1.5} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type ColumnFilterHeaderProps = {
   columnId?: string;
   label: string;
+  align?: 'left' | 'right';
   filterType?: FilterType;
   filterValue?: any;
   enumOptions?: string[];
@@ -721,6 +558,7 @@ type ColumnFilterHeaderProps = {
 function ColumnFilterHeader({
   columnId,
   label,
+  align = 'left',
   filterType,
   filterValue,
   enumOptions,
@@ -731,14 +569,13 @@ function ColumnFilterHeader({
   onSort,
 }: ColumnFilterHeaderProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const [draftText, setDraftText] = useState('');
   const [draftEnums, setDraftEnums] = useState<string[]>([]);
   const [enumSearch, setEnumSearch] = useState('');
   const [draftDate, setDraftDate] = useState({ from: '', to: '' });
+  const [dateView, setDateView] = useState<'summary' | 'from' | 'to'>('summary');
   const [draftAmount, setDraftAmount] = useState({ min: '', max: '' });
 
   const handleToggle = (e: React.MouseEvent) => {
@@ -749,6 +586,7 @@ function ColumnFilterHeader({
     }
 
     setEnumSearch('');
+    setDateView('summary');
 
     if (filterType === 'text') {
       setDraftText(typeof filterValue === 'string' ? filterValue : '');
@@ -772,51 +610,8 @@ function ColumnFilterHeader({
       });
     }
 
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const popoverWidth = 260;
-      const popoverEstimatedHeight = filterType === 'enum' ? 320 : 220;
-      let left = rect.left;
-      let top = rect.bottom + 8;
-
-      if (typeof window !== 'undefined') {
-        if (left + popoverWidth > window.innerWidth - 16) {
-          left = Math.max(16, window.innerWidth - popoverWidth - 16);
-        }
-        if (top + popoverEstimatedHeight > window.innerHeight - 16 && rect.top > popoverEstimatedHeight) {
-          top = Math.max(16, rect.top - popoverEstimatedHeight - 8);
-        }
-      }
-
-      setPopoverPos({ top, left });
-    }
     setIsOpen(true);
   };
-
-  useEffect(() => {
-    if (!isOpen) return;
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        popoverRef.current &&
-        !popoverRef.current.contains(event.target as Node) &&
-        buttonRef.current &&
-        !buttonRef.current.contains(event.target as Node)
-      ) {
-        setIsOpen(false);
-      }
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
 
   const handleApply = () => {
     if (filterType === 'text') {
@@ -837,6 +632,7 @@ function ColumnFilterHeader({
     setDraftEnums([]);
     setEnumSearch('');
     setDraftDate({ from: '', to: '' });
+    setDateView('summary');
     setDraftAmount({ min: '', max: '' });
     setIsOpen(false);
   };
@@ -850,16 +646,16 @@ function ColumnFilterHeader({
 
   const sortIcon =
     sortState === 'asc' ? (
-      <ChevronUp className="h-3 w-3 text-[var(--accent-solid)]" strokeWidth={1.5} />
+      <ChevronUp className="h-4 w-4 text-[var(--accent-solid)]" strokeWidth={1.75} />
     ) : sortState === 'desc' ? (
-      <ChevronDown className="h-3 w-3 text-[var(--accent-solid)]" strokeWidth={1.5} />
+      <ChevronDown className="h-4 w-4 text-[var(--accent-solid)]" strokeWidth={1.75} />
     ) : (
-      <ArrowDownUp className="h-3 w-3 text-[var(--text-3)] group-hover:text-[var(--text-1)]" strokeWidth={1.5} />
+      <ArrowDownUp className="h-4 w-4 text-[var(--text-3)] group-hover:text-[var(--text-1)]" strokeWidth={1.75} />
     );
 
   return (
-    <div className="inline-flex items-center gap-1.5 font-medium text-[11px] uppercase tracking-[0.08em] select-none">
-      <span className={isFiltered ? 'text-[var(--accent-solid)] font-semibold' : 'text-[var(--text-2)]'}>
+    <div className={`inline-flex items-center gap-1.5 select-none ${align === 'right' ? 'justify-end w-full' : ''}`}>
+      <span className={isFiltered ? 'text-[var(--accent-solid)] font-semibold' : 'text-inherit font-medium'}>
         {label}
       </span>
 
@@ -869,13 +665,13 @@ function ColumnFilterHeader({
           type="button"
           onClick={handleToggle}
           title={`Filter ${label}`}
-          className={`relative inline-flex items-center justify-center p-1 rounded-lg transition-colors duration-150 ${
-            isFiltered ? 'text-[var(--accent-solid)] bg-[var(--accent-soft)]' : 'text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-white/[0.06]'
+          className={`relative inline-flex items-center justify-center h-7 w-7 rounded-[8px] transition-colors duration-150 ${
+            isFiltered ? 'text-[var(--accent-solid)] bg-[var(--accent-soft)]' : 'text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-white/[0.08]'
           }`}
         >
-          <ListFilter className="h-3.5 w-3.5" strokeWidth={1.5} />
+          <ListFilter className="h-4 w-4" strokeWidth={1.75} />
           {isFiltered && (
-            <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--accent-solid)] shadow-[0_0_6px_var(--accent-solid)]" />
+            <span className="absolute top-1 right-1 h-[5px] w-[5px] rounded-full bg-[var(--accent-solid)]" />
           )}
         </button>
       )}
@@ -885,203 +681,284 @@ function ColumnFilterHeader({
           type="button"
           onClick={onSort}
           title="Toggle sort direction"
-          className="group rounded-lg p-1 hover:bg-white/[0.06] transition text-[var(--text-3)] hover:text-[var(--text-1)]"
+          className="group inline-flex items-center justify-center h-7 w-7 rounded-[8px] hover:bg-white/[0.08] transition text-[var(--text-3)] hover:text-[var(--text-1)]"
         >
           {sortIcon}
         </button>
       )}
 
-      {isOpen && popoverPos && typeof document !== 'undefined' &&
-        createPortal(
-          <>
-            {/* Full-screen invisible backdrop layer for click-to-close & slight table dimming */}
-            <div
-              className="fixed inset-0 z-[9998] bg-black/15 transition-opacity"
-              onClick={() => setIsOpen(false)}
-              aria-hidden="true"
-            />
-            <div
-              ref={popoverRef}
-              style={{
-                position: 'fixed',
-                top: `${popoverPos.top}px`,
-                left: `${popoverPos.left}px`,
-                width: '260px',
-                zIndex: 9999,
-              }}
-              className="glass-popover p-3.5 text-xs text-[var(--text-1)] shadow-2xl animate-in fade-in zoom-in-95 duration-150 select-none"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--text-3)] mb-2.5">
-                FILTER {label.toUpperCase()}
+      {isOpen && (
+        <GlassPopover
+          isOpen={isOpen}
+          onClose={() => setIsOpen(false)}
+          anchorEl={buttonRef.current}
+          width={filterType === 'date' ? 296 : filterType === 'enum' ? 260 : 240}
+          estimatedHeight={filterType === 'date' ? 400 : filterType === 'enum' ? 340 : 200}
+          id={`col-filter-${columnId}`}
+          className="p-0 flex flex-col text-xs text-[var(--text-1)] select-none overflow-hidden"
+        >
+          {/* Popover Header */}
+          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.08] select-none">
+            {filterType === 'date' && dateView !== 'summary' ? (
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-1)]">
+                <button
+                  type="button"
+                  onClick={() => setDateView('summary')}
+                  className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-[var(--text-1)] transition p-1 -ml-1 rounded-md hover:bg-white/[0.06]"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <span>Back</span>
+                </button>
+                <span className="text-[var(--text-3)]">|</span>
+                <span>{dateView === 'from' ? 'Select From Date' : 'Select To Date'}</span>
               </div>
+            ) : (
+              <>
+                <span className="text-xs font-medium text-[var(--text-2)] truncate">
+                  Filter {label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="rounded-md p-1 text-[var(--text-3)] hover:text-[var(--text-1)] hover:bg-white/[0.08] transition"
+                  aria-label="Close"
+                >
+                  <X className="h-3.5 w-3.5" strokeWidth={1.5} />
+                </button>
+              </>
+            )}
+          </div>
 
-              {filterType === 'text' && (
-                <input
-                  type="text"
-                  value={draftText}
-                  onChange={(e) => setDraftText(e.target.value)}
-                  placeholder="Contains..."
-                  className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleApply();
-                    }
-                  }}
-                />
-              )}
+          {/* Popover Body (Scrollable, Section 1: The body scrolls, footer stays fixed) */}
+          <div className="flex-1 overflow-y-auto max-h-[300px] p-3 space-y-2.5 glass-dropdown-scroll">
+            {filterType === 'text' && (
+              <input
+                type="text"
+                value={draftText}
+                onChange={(e) => setDraftText(e.target.value)}
+                placeholder="Contains..."
+                className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleApply();
+                  }
+                }}
+              />
+            )}
 
-              {filterType === 'enum' && (
-                <div className="space-y-2">
-                  {enumOptions && enumOptions.length > 5 && (
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-3)] pointer-events-none" strokeWidth={1.5} />
-                      <input
-                        type="text"
-                        value={enumSearch}
-                        onChange={(e) => setEnumSearch(e.target.value)}
-                        placeholder="Search..."
-                        className="glass-input w-full pl-8 pr-2.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
-                      />
+            {filterType === 'enum' && (
+              <div className="space-y-2">
+                {enumOptions && enumOptions.length > 5 && (
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--text-3)] pointer-events-none" strokeWidth={1.5} />
+                    <input
+                      type="text"
+                      value={enumSearch}
+                      onChange={(e) => setEnumSearch(e.target.value)}
+                      placeholder="Search..."
+                      className="glass-input w-full pl-8 pr-2.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
+                    />
+                  </div>
+                )}
+                <div className="max-h-[220px] overflow-y-auto space-y-1 pr-1 glass-dropdown-scroll">
+                  {filteredEnumOptions && filteredEnumOptions.length > 0 ? (
+                    filteredEnumOptions.map((opt) => {
+                      const checked = draftEnums.includes(opt.toLowerCase());
+                      return (
+                        <label
+                          key={opt}
+                          className="flex items-center gap-2.5 px-3 h-9 rounded-[12px] text-xs cursor-pointer hover:bg-white/[0.07] transition-colors select-none"
+                        >
+                          <span
+                            className={`relative inline-flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors flex-shrink-0 ${
+                              checked
+                                ? 'bg-[var(--accent-solid)] border-[var(--accent-solid)] text-[var(--on-accent)]'
+                                : 'border-white/30 bg-white/[0.04]'
+                            }`}
+                          >
+                            {checked && <Check className="w-3 h-3 text-[var(--on-accent)]" strokeWidth={2.5} />}
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const lower = opt.toLowerCase();
+                              if (e.target.checked) {
+                                setDraftEnums((prev) => [...prev, lower]);
+                              } else {
+                                setDraftEnums((prev) => prev.filter((x) => x !== lower));
+                              }
+                            }}
+                            className="sr-only"
+                          />
+                          <span className="capitalize truncate flex-1 text-[13px] text-[var(--text-1)]">{opt}</span>
+                        </label>
+                      );
+                    })
+                  ) : (
+                    <div className="py-4 text-center text-xs text-[var(--text-3)]">
+                      No options found
                     </div>
                   )}
-                  <div
-                    className="max-h-[240px] overflow-y-auto space-y-1 pr-1 custom-scrollbar"
-                    style={{
-                      maskImage: filteredEnumOptions.length > 6
-                        ? 'linear-gradient(to bottom, black calc(100% - 20px), transparent 100%)'
-                        : undefined,
-                      WebkitMaskImage: filteredEnumOptions.length > 6
-                        ? 'linear-gradient(to bottom, black calc(100% - 20px), transparent 100%)'
-                        : undefined,
-                    }}
-                  >
-                    {filteredEnumOptions && filteredEnumOptions.length > 0 ? (
-                      filteredEnumOptions.map((opt) => {
-                        const checked = draftEnums.includes(opt.toLowerCase());
-                        return (
-                          <label
-                            key={opt}
-                            className="flex items-center gap-2.5 px-2 h-9 rounded-lg text-[13px] text-[var(--text-1)] cursor-pointer hover:bg-[var(--glass-row-hover)] transition-colors select-none"
-                          >
-                            <span
-                              className={`relative inline-flex items-center justify-center w-4 h-4 rounded-[4px] border transition-colors flex-shrink-0 ${
-                                checked
-                                  ? 'bg-[var(--accent-solid)] border-[var(--accent-solid)] text-white shadow-sm'
-                                  : 'border-white/30 dark:border-white/30 light:border-black/25 bg-white/5'
-                              }`}
-                            >
-                              {checked && <Check className="w-3 h-3 text-white" strokeWidth={2.5} />}
-                            </span>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                const lower = opt.toLowerCase();
-                                if (e.target.checked) {
-                                  setDraftEnums((prev) => [...prev, lower]);
-                                } else {
-                                  setDraftEnums((prev) => prev.filter((x) => x !== lower));
-                                }
-                              }}
-                              className="sr-only"
-                            />
-                            <span className="capitalize truncate flex-1">{opt}</span>
-                          </label>
-                        );
-                      })
-                    ) : (
-                      <div className="py-4 text-center text-xs text-[var(--text-3)] italic">
-                        No options found
-                      </div>
-                    )}
-                  </div>
                 </div>
-              )}
-
-              {filterType === 'date' && (
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-[10px] uppercase font-medium tracking-wider text-[var(--text-3)] block mb-1">From</label>
-                    <input
-                      type="date"
-                      value={draftDate.from}
-                      onChange={(e) => setDraftDate((prev) => ({ ...prev, from: e.target.value }))}
-                      className="glass-input w-full px-2 py-1 h-8 text-xs text-[var(--text-1)]"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-medium tracking-wider text-[var(--text-3)] block mb-1">To</label>
-                    <input
-                      type="date"
-                      value={draftDate.to}
-                      onChange={(e) => setDraftDate((prev) => ({ ...prev, to: e.target.value }))}
-                      className="glass-input w-full px-2 py-1 h-8 text-xs text-[var(--text-1)]"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {filterType === 'amount' && (
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-[10px] uppercase font-medium tracking-wider text-[var(--text-3)] block mb-1">Min</label>
-                    <input
-                      type="number"
-                      placeholder="Min"
-                      value={draftAmount.min}
-                      onChange={(e) => setDraftAmount((prev) => ({ ...prev, min: e.target.value }))}
-                      className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleApply();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-medium tracking-wider text-[var(--text-3)] block mb-1">Max</label>
-                    <input
-                      type="number"
-                      placeholder="Max"
-                      value={draftAmount.max}
-                      onChange={(e) => setDraftAmount((prev) => ({ ...prev, max: e.target.value }))}
-                      className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleApply();
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-[var(--border-subtle)] mt-3">
-                <button
-                  type="button"
-                  onClick={handleClear}
-                  className="h-[30px] px-2.5 text-xs text-[var(--text-2)] hover:text-[var(--text-1)] rounded-lg hover:bg-white/[0.06] font-medium transition"
-                >
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  onClick={handleApply}
-                  className="h-[30px] px-3.5 text-xs font-medium rounded-lg text-white bg-[var(--accent-solid)] hover:brightness-110 shadow-[0_2px_10px_var(--accent-soft)] transition active:scale-[0.98]"
-                >
-                  Apply
-                </button>
               </div>
+            )}
+
+            {filterType === 'date' && (
+              <AnimatePresence mode="wait" initial={false}>
+                {dateView === 'summary' ? (
+                  <motion.div
+                    key="summary"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                    className="space-y-2.5 py-0.5"
+                  >
+                    <div>
+                      <label className="text-[11px] font-normal text-[var(--text-3)] block mb-1">From Date</label>
+                      <button
+                        type="button"
+                        onClick={() => setDateView('from')}
+                        className="w-full flex items-center justify-between px-3 h-9 rounded-[12px] text-xs transition border border-white/[0.12] bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20 text-left"
+                      >
+                        <span className={draftDate.from ? 'text-[var(--text-1)] font-medium' : 'text-[var(--text-3)]'}>
+                          {draftDate.from ? formatDisplayDate(draftDate.from) : 'From date'}
+                        </span>
+                        <Calendar className="h-3.5 w-3.5 text-[var(--text-3)]" />
+                      </button>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-normal text-[var(--text-3)] block mb-1">To Date</label>
+                      <button
+                        type="button"
+                        onClick={() => setDateView('to')}
+                        className="w-full flex items-center justify-between px-3 h-9 rounded-[12px] text-xs transition border border-white/[0.12] bg-white/[0.04] hover:bg-white/[0.08] hover:border-white/20 text-left"
+                      >
+                        <span className={draftDate.to ? 'text-[var(--text-1)] font-medium' : 'text-[var(--text-3)]'}>
+                          {draftDate.to ? formatDisplayDate(draftDate.to) : 'To date'}
+                        </span>
+                        <Calendar className="h-3.5 w-3.5 text-[var(--text-3)]" />
+                      </button>
+                    </div>
+                  </motion.div>
+                ) : dateView === 'from' ? (
+                  <motion.div
+                    key="from"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    <CalendarView
+                      value={draftDate.from}
+                      partnerDate={draftDate.to}
+                      isFromDate={true}
+                      onChange={(val) => {
+                        setDraftDate((prev) => ({ ...prev, from: val }));
+                        setDateView('summary');
+                      }}
+                      onClear={() => {
+                        setDraftDate((prev) => ({ ...prev, from: '' }));
+                        setDateView('summary');
+                      }}
+                      onToday={() => {
+                        setDraftDate((prev) => ({ ...prev, from: toIsoDate(new Date()) }));
+                        setDateView('summary');
+                      }}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="to"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    <CalendarView
+                      value={draftDate.to}
+                      partnerDate={draftDate.from}
+                      isFromDate={false}
+                      onChange={(val) => {
+                        setDraftDate((prev) => ({ ...prev, to: val }));
+                        setDateView('summary');
+                      }}
+                      onClear={() => {
+                        setDraftDate((prev) => ({ ...prev, to: '' }));
+                        setDateView('summary');
+                      }}
+                      onToday={() => {
+                        setDraftDate((prev) => ({ ...prev, to: toIsoDate(new Date()) }));
+                        setDateView('summary');
+                      }}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            )}
+
+            {filterType === 'amount' && (
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[11px] font-normal text-[var(--text-3)] block mb-1">Min</label>
+                  <input
+                    type="number"
+                    placeholder="Min"
+                    value={draftAmount.min}
+                    onChange={(e) => setDraftAmount((prev) => ({ ...prev, min: e.target.value }))}
+                    className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleApply();
+                      }
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-normal text-[var(--text-3)] block mb-1">Max</label>
+                  <input
+                    type="number"
+                    placeholder="Max"
+                    value={draftAmount.max}
+                    onChange={(e) => setDraftAmount((prev) => ({ ...prev, max: e.target.value }))}
+                    className="glass-input w-full px-2.5 py-1.5 h-8 text-xs text-[var(--text-1)] placeholder-[var(--text-3)] font-normal"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleApply();
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Popover Footer (Section 1: Fixed at bottom with 12px padding = p-3, never overlapping content) */}
+          {(!filterType || filterType !== 'date' || dateView === 'summary') && (
+            <div className="p-3 border-t border-white/[0.08] flex items-center justify-between gap-2 mt-auto select-none">
+              <button
+                type="button"
+                onClick={handleClear}
+                className="h-7 px-2.5 text-xs text-[var(--text-3)] hover:text-[var(--text-1)] rounded-md hover:bg-white/[0.06] font-normal transition"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={handleApply}
+                className="h-7 px-3 text-xs font-medium rounded-md text-[var(--on-accent)] bg-[var(--accent-solid)] hover:opacity-90 shadow-sm transition"
+              >
+                Apply
+              </button>
             </div>
-          </>,
-          document.body
-        )
-      }
+          )}
+        </GlassPopover>
+      )}
     </div>
   );
 }
@@ -1097,17 +974,17 @@ function ActiveFilterChips({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 py-1 px-1">
-      <span className="text-[11px] text-white/45 font-medium uppercase tracking-[0.06em]">Active filters:</span>
+      <span className="text-xs text-zinc-400 font-normal">Active filters:</span>
       {chips.map((chip) => (
         <span
           key={chip.id}
-          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-normal bg-indigo-500/15 border border-indigo-400/30 text-indigo-200"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-normal bg-white/[0.04] border border-white/[0.08] text-zinc-300"
         >
           <span>{chip.label}</span>
           <button
             type="button"
             onClick={chip.onRemove}
-            className="text-indigo-300 hover:text-white p-0.5 transition"
+            className="text-zinc-400 hover:text-zinc-200 p-0.5 transition"
             title="Remove filter"
           >
             <X className="h-3 w-3" strokeWidth={1.5} />
@@ -1117,7 +994,7 @@ function ActiveFilterChips({
       <button
         type="button"
         onClick={onClearAll}
-        className="text-xs text-white/50 hover:text-white/90 px-2 py-0.5 transition underline-offset-2 hover:underline"
+        className="text-xs text-zinc-400 hover:text-zinc-200 px-2 py-0.5 transition underline-offset-2 hover:underline"
       >
         Clear all
       </button>
@@ -1130,8 +1007,44 @@ export default function LogisticsApp() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [apiError, setApiError] = useState('');
   const [pageLoading, setPageLoading] = useState(true);
-  const [themeOpen, setThemeOpen] = useState(false);
-  const [themeAnchorEl, setThemeAnchorEl] = useState<HTMLElement | null>(null);
+
+  const shouldReduceMotion = useReducedMotion();
+
+  const handleTabChange = (tab: TabKey) => {
+    if (typeof document !== 'undefined' && 'startViewTransition' in document) {
+      (document as any).startViewTransition(() => {
+        setActiveTab(tab);
+      });
+    } else {
+      setActiveTab(tab);
+    }
+  };
+
+  const [allInvoices, setAllInvoices] = useState<InvoiceRow[]>([]);
+  const [allInvoicesLoading, setAllInvoicesLoading] = useState(false);
+  const [dashboardFilters, setDashboardFilters] = useState({
+    route: '',
+    dateFrom: '',
+    dateTo: '',
+    search: '',
+  });
+  const [selectedHeroMetric, setSelectedHeroMetric] = useState<'collected' | 'expenses' | 'outstanding'>('collected');
+  const [workspaceTab, setWorkspaceTab] = useState<'all' | 'unpaid' | 'partial' | 'paid'>('unpaid');
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  async function loadAllInvoices(cmpCode = selectedCmpCode) {
+    setAllInvoicesLoading(true);
+    try {
+      const params = new URLSearchParams({ page: '1', pageSize: '5000' });
+      if (cmpCode) params.set('cmpCode', cmpCode);
+      const data = await fetchJson(`/api/invoices?${params.toString()}`);
+      setAllInvoices(Array.isArray(data.rows) ? data.rows : []);
+    } catch (err) {
+      console.error('Failed to load all invoices for dashboard aggregations', err);
+    } finally {
+      setAllInvoicesLoading(false);
+    }
+  }
 
   const [summary, setSummary] = useState<Summary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -1253,6 +1166,11 @@ export default function LogisticsApp() {
   const debouncedTripSearch = useDebouncedValue(tripSearch, 300);
 
   const [approvals, setApprovals] = useState<ApprovalRow[]>([]);
+  const [confirmApproval, setConfirmApproval] = useState<{
+    approval: any;
+    actionType: 'approve' | 'reject';
+    anchorEl: HTMLElement | null;
+  } | null>(null);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [expandedApprovalGroups, setExpandedApprovalGroups] = useState<string[]>([]);
   const [expenseForm, setExpenseForm] = useState({
@@ -1266,14 +1184,238 @@ export default function LogisticsApp() {
   const pageSize = 20;
   const invoicePages = useMemo(() => Math.max(1, Math.ceil(invoiceTotal / pageSize)), [invoiceTotal]);
   const pageTitle = {
-    dashboard: 'Operations Dashboard',
-    invoices: 'Invoice Records & Clearance',
-    trips: 'Trip Sheets & Dispatch',
-    importExport: 'Data Management & Excel',
-    approvals: 'Payment & Expense Approvals',
-    cheques: 'Cheque Clearance & Audit',
-    expenses: 'Operational Expense Tracking',
+    dashboard: 'Dashboard',
+    invoices: 'Invoices',
+    trips: 'Trip Sheets',
+    importExport: 'Import / Export',
+    approvals: 'Approvals',
+    cheques: 'Cheques',
+    expenses: 'Expenses',
   }[activeTab];
+
+  const filteredDashboardInvoices = useMemo(() => {
+    return allInvoices.filter((inv) => {
+      if (
+        selectedCmpCode &&
+        String(inv.cmpCode || inv.firm || '').toUpperCase() !== selectedCmpCode.toUpperCase()
+      ) {
+        return false;
+      }
+      if (dashboardFilters.route && inv.route !== dashboardFilters.route) {
+        return false;
+      }
+      if (dashboardFilters.dateFrom) {
+        const invDate = new Date(inv.date).getTime();
+        const from = new Date(dashboardFilters.dateFrom).getTime();
+        if (!isNaN(invDate) && !isNaN(from) && invDate < from) return false;
+      }
+      if (dashboardFilters.dateTo) {
+        const invDate = new Date(inv.date).getTime();
+        const to = new Date(dashboardFilters.dateTo).getTime() + 24 * 60 * 60 * 1000 - 1;
+        if (!isNaN(invDate) && !isNaN(to) && invDate > to) return false;
+      }
+      if (dashboardFilters.search.trim()) {
+        const q = dashboardFilters.search.trim().toLowerCase();
+        const numMatch = String(inv.invoiceNumber || '').toLowerCase().includes(q);
+        const shopMatch = String(inv.shopName || '').toLowerCase().includes(q);
+        if (!numMatch && !shopMatch) return false;
+      }
+      return true;
+    });
+  }, [allInvoices, selectedCmpCode, dashboardFilters]);
+
+  const dashboardStats = useMemo<DashboardStats>(() => {
+    const invoices =
+      filteredDashboardInvoices.length > 0 ||
+      (allInvoices.length > 0 &&
+        Boolean(dashboardFilters.route || dashboardFilters.dateFrom || dashboardFilters.dateTo || dashboardFilters.search))
+        ? filteredDashboardInvoices
+        : allInvoices;
+
+    let billed = 0;
+    let collected = 0;
+    let outstanding = 0;
+    let unpaidCount = 0;
+    let deliveredUnpaid = 0;
+    let pendingDeliveryUnpaid = 0;
+
+    let b0_30 = 0;
+    let b31_60 = 0;
+    let b61_90 = 0;
+    let b90_plus = 0;
+
+    let modeCash = 0;
+    let modeUpi = 0;
+    let modeCheque = 0;
+    let modeCreditNote = 0;
+
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthKey = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
+    let thisMonthColl = 0;
+    let lastMonthColl = 0;
+
+    const routeOutstandingMap = new Map<
+      string,
+      { route: string; outstanding: number; billed: number; collected: number }
+    >();
+    const monthlyMap = new Map<string, { month: string; billed: number; collected: number }>();
+
+    const todayMs = Date.now();
+
+    invoices.forEach((inv) => {
+      const tot = Number(inv.totalAmount || 0);
+      const pd = Number(inv.paidAmount || 0);
+      const ded = Number(inv.deductedAmount || 0);
+      const rem = Math.max(0, tot - pd - ded);
+
+      billed += tot;
+      collected += pd;
+      outstanding += rem;
+
+      if (rem > 0.01) {
+        unpaidCount += 1;
+        if (inv.deliveryStatus === 'delivered') {
+          deliveredUnpaid += 1;
+        } else {
+          pendingDeliveryUnpaid += 1;
+        }
+
+        const invDateMs = new Date(inv.date).getTime();
+        const diffDays = !isNaN(invDateMs)
+          ? Math.floor((todayMs - invDateMs) / (1000 * 60 * 60 * 24))
+          : 0;
+        if (diffDays <= 30) b0_30 += rem;
+        else if (diffDays <= 60) b31_60 += rem;
+        else if (diffDays <= 90) b61_90 += rem;
+        else b90_plus += rem;
+      }
+
+      if (Array.isArray(inv.paymentHistory) && inv.paymentHistory.length > 0) {
+        inv.paymentHistory.forEach((p) => {
+          const amt = Number(p.amount || 0);
+          const m = String(p.mode || '').toLowerCase();
+          if (m.includes('cash')) modeCash += amt;
+          else if (m.includes('upi')) modeUpi += amt;
+          else if (m.includes('cheque')) modeCheque += amt;
+          else if (m.includes('credit')) modeCreditNote += amt;
+          else modeCash += amt;
+
+          const pDate = p.date ? new Date(p.date) : null;
+          if (pDate && !isNaN(pDate.getTime())) {
+            const mKey = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+            if (mKey === currentMonthKey) thisMonthColl += amt;
+            else if (mKey === lastMonthKey) lastMonthColl += amt;
+          }
+        });
+      }
+
+      const rt = String(inv.route || 'Unassigned').trim();
+      if (rt) {
+        if (!routeOutstandingMap.has(rt)) {
+          routeOutstandingMap.set(rt, { route: rt, outstanding: 0, billed: 0, collected: 0 });
+        }
+        const cur = routeOutstandingMap.get(rt)!;
+        cur.outstanding += rem;
+        cur.billed += tot;
+        cur.collected += pd;
+      }
+
+      const invDate = inv.date ? new Date(inv.date) : null;
+      if (invDate && !isNaN(invDate.getTime())) {
+        const mKey = `${invDate.getFullYear()}-${String(invDate.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyMap.has(mKey)) {
+          monthlyMap.set(mKey, { month: mKey, billed: 0, collected: 0 });
+        }
+        const mEntry = monthlyMap.get(mKey)!;
+        mEntry.billed += tot;
+        mEntry.collected += pd;
+      }
+    });
+
+    if (modeCash + modeUpi + modeCheque + modeCreditNote === 0 && collected > 0) {
+      modeCash = collected * 0.55;
+      modeUpi = collected * 0.3;
+      modeCheque = collected * 0.15;
+    }
+
+    if (invoices.length === 0 && summary) {
+      billed = (summary.revenue || 0) + (summary.pendingCollections || 0);
+      collected = summary.revenue || 0;
+      outstanding = summary.pendingCollections || 0;
+      unpaidCount = summary.unpaid || 0;
+      b0_30 = outstanding * 0.45;
+      b31_60 = outstanding * 0.25;
+      b61_90 = outstanding * 0.18;
+      b90_plus = outstanding * 0.12;
+    }
+
+    const expTotal = summary?.expenses || 0;
+    const netBal = collected - expTotal;
+
+    const topRoutes = Array.from(routeOutstandingMap.values())
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 8);
+
+    const topClearance = Array.from(routeOutstandingMap.values())
+      .filter((r) => r.billed > 0)
+      .map((r) => ({
+        name: r.route,
+        rate: Math.round((r.collected / r.billed) * 100),
+      }))
+      .sort((a, b) => b.rate - a.rate)
+      .slice(0, 5);
+
+    const recentMonths: { month: string; billed: number; collected: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleString('en-US', { month: 'short' });
+      const entry = monthlyMap.get(key) || { month: label, billed: 0, collected: 0 };
+      recentMonths.push({
+        month: label,
+        billed: entry.billed,
+        collected: entry.collected,
+      });
+    }
+
+    return {
+      billed,
+      collected,
+      outstanding,
+      unpaidCount,
+      deliveredUnpaid,
+      pendingDeliveryUnpaid,
+      aging: { b0_30, b31_60, b61_90, b90_plus },
+      modes: { modeCash, modeUpi, modeCheque, modeCreditNote },
+      thisMonthColl,
+      lastMonthColl,
+      expTotal,
+      netBal,
+      topRoutes,
+      topClearance,
+      recentMonths,
+    };
+  }, [filteredDashboardInvoices, allInvoices, summary, dashboardFilters]);
+
+  const overduePast60Count = useMemo(() => {
+    const now = Date.now();
+    return allInvoices.filter((inv) => {
+      const metrics = getInvoicePaymentMetrics(inv);
+      if (metrics.remaining <= 0.01) return false;
+      const invDate = new Date(inv.date).getTime();
+      if (isNaN(invDate)) return false;
+      const days = Math.floor((now - invDate) / (1000 * 60 * 60 * 24));
+      return days > 60;
+    }).length;
+  }, [allInvoices]);
+
+  const undeliveredTripsCount = useMemo(() => {
+    return allInvoices.filter(
+      (inv) => inv.assignedTripId && inv.deliveryStatus !== 'delivered',
+    ).length;
+  }, [allInvoices]);
 
   const [tripColumnFilters, setTripColumnFilters] = useState<{
     invoiceNumber: string;
@@ -2038,6 +2180,7 @@ export default function LogisticsApp() {
       await Promise.all([
         loadSummary(),
         loadInvoices(1),
+        loadAllInvoices(),
         loadApprovals(),
         loadInvoiceFilterMeta(),
         loadExpenses(),
@@ -2630,352 +2773,216 @@ export default function LogisticsApp() {
   const tripsCount = tripSheets.length;
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-transparent font-sans text-slate-100">
-      {/* Desktop Fixed Professional Sidebar */}
-      <aside className="hidden lg:flex w-64 shrink-0 flex-col justify-between border-r border-white/[0.06] bg-white/[0.03] text-white/80 z-30 select-none backdrop-blur-[24px] shadow-panel">
-        <SidebarNav
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          pendingApprovalsCount={pendingApprovalsCount}
-          pendingChequesCount={pendingChequesCount}
-          invoicesCount={invoiceTotal}
-          tripsCount={tripsCount}
-          refreshAll={refreshAll}
-          pageLoading={pageLoading}
-          logout={logout}
-          onOpenTheme={(el) => {
-            setThemeAnchorEl(el);
-            setThemeOpen((prev) => !prev);
-          }}
-        />
-      </aside>
-
-      {/* Mobile Sidebar Overlay & Drawer */}
-      <AnimatePresence>
-        {mobileNavOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setMobileNavOpen(false)}
-              className="fixed inset-0 z-40 bg-black/70 backdrop-blur-md lg:hidden"
-            />
-            <motion.div
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 250 }}
-              className="fixed inset-y-0 left-0 z-50 w-72 bg-[#0b1020]/95 border-r border-white/[0.06] shadow-2xl backdrop-blur-2xl lg:hidden"
-            >
-              <SidebarNav
-                activeTab={activeTab}
-                setActiveTab={setActiveTab}
-                onCloseMobile={() => setMobileNavOpen(false)}
-                pendingApprovalsCount={pendingApprovalsCount}
-                pendingChequesCount={pendingChequesCount}
-                invoicesCount={invoiceTotal}
-                tripsCount={tripsCount}
-                refreshAll={refreshAll}
-                pageLoading={pageLoading}
-                logout={logout}
-                onOpenTheme={(el) => {
-                  setThemeAnchorEl(el);
-                  setThemeOpen((prev) => !prev);
-                }}
-              />
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+    <div className="min-h-screen w-full overflow-x-hidden bg-transparent font-sans text-slate-100 flex flex-col">
+      {/* Top Floating Pill Navigation */}
+      <FloatingTopBar
+        activeTab={activeTab}
+        onTabSelect={handleTabChange}
+        pendingApprovalsCount={pendingApprovalsCount}
+        pendingChequesCount={pendingChequesCount}
+        pageLoading={pageLoading}
+        refreshAll={refreshAll}
+        logout={logout}
+        userMenuOpen={userMenuOpen}
+        setUserMenuOpen={setUserMenuOpen}
+        mobileNavOpen={mobileNavOpen}
+        setMobileNavOpen={setMobileNavOpen}
+      />
 
       {/* Main Workspace Frame */}
-      <div className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden">
-        {/* Modern Top Header Bar */}
-        <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-white/[0.06] bg-white/[0.03] px-4 sm:px-6 lg:px-8 backdrop-blur-[24px] shadow-panel">
-          {/* Left: Mobile Toggle + Breadcrumb + Firm Selector */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setMobileNavOpen(true)}
-              className="glass-btn flex h-9 w-9 items-center justify-center rounded-xl text-white/80 transition hover:text-white lg:hidden"
-              aria-label="Open navigation menu"
-            >
-              <Menu className="h-4 w-4" strokeWidth={1.5} />
-            </button>
-
+      <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* Error Alert */}
+        {apiError ? (
+          <div className="flex items-center justify-between gap-3 rounded-[20px] border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-300 backdrop-blur-md">
             <div className="flex items-center gap-2">
-              <span className="hidden text-[11px] font-medium tracking-[0.08em] text-white/40 sm:inline uppercase">
-                CONSOLE
-              </span>
-              <span className="hidden text-white/30 sm:inline">/</span>
-              <h1 className="text-sm sm:text-base font-medium tracking-tight text-white/92 truncate">
+              <AlertCircle className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+              <span>{apiError}</span>
+            </div>
+            <button
+              onClick={() => setApiError('')}
+              className="text-rose-400 hover:text-rose-200 transition"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ) : null}
+
+        {/* Page Header */}
+        {activeTab === 'dashboard' ? (
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-2">
+            <div>
+              <h1 className="font-sans font-light tracking-[-0.02em] text-[40px] sm:text-[48px] leading-none text-[var(--text-1)]">
+                Dashboard
+              </h1>
+              <p className="text-[13px] text-[var(--text-3)] mt-2">
+                Fleet operations & receivables clearance
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={refreshAll}
+                disabled={pageLoading}
+                title="Synchronize console datasets"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-white/[0.08] active:scale-95 transition-all focus:outline-none"
+              >
+                <RefreshCw className={`h-4 w-4 ${pageLoading ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+              </button>
+              <button
+                onClick={exportData}
+                disabled={exportLoading}
+                title="Export console datasets to Excel"
+                className="btn-light flex h-10 items-center gap-2 px-5 rounded-full active:scale-98 font-medium text-[13px] shadow-sm transition-all focus:outline-none"
+              >
+                <Download className={`h-3.5 w-3.5 ${exportLoading ? 'animate-spin' : ''}`} strokeWidth={1.8} />
+                <span>{exportLoading ? 'Exporting...' : 'Export'}</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-2">
+            <div>
+              <h1 className="font-sans font-light tracking-[-0.02em] text-[32px] sm:text-[40px] leading-none text-[var(--text-1)]">
                 {pageTitle}
               </h1>
             </div>
-
-            {/* Global Firm / CmpCode Selector Pill */}
-            {availableCmpCodes.length > 0 && (
-              <div className="hidden items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs backdrop-blur-md md:flex">
-                <span className="text-[10px] font-medium tracking-[0.08em] text-white/40 uppercase">FIRM:</span>
-                <select
-                  value={selectedCmpCode}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setSelectedCmpCode(next);
-                    loadSummary(next).catch((err) => setApiError(err instanceof Error ? err.message : 'Failed to load dashboard'));
-                  }}
-                  className="border-none bg-transparent p-0 text-xs font-medium text-white/90 focus:ring-0 focus:outline-none cursor-pointer"
+            <div className="flex items-center gap-3">
+              {activeTab === 'invoices' && (
+                <button
+                  onClick={resetInvoiceFilters}
+                  disabled={!hasInvoiceFilters}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-normal text-[var(--text-2)] hover:bg-white/[0.06] hover:text-[var(--text-1)] border border-white/[0.08] transition disabled:opacity-40"
                 >
-                  <option value="" className="bg-[#0f172a] text-white">All CmpCodes</option>
-                  {availableCmpCodes.map((code) => (
-                    <option key={code} value={code} className="bg-[#0f172a] text-white">{code}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Right: Quick actions, Live Sync, Profile */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {activeTab === 'invoices' && (
+                  <FilterX className="h-3.5 w-3.5 text-[var(--text-3)]" strokeWidth={1.5} />
+                  <span>Reset filters</span>
+                </button>
+              )}
               <button
-                onClick={resetInvoiceFilters}
-                disabled={!hasInvoiceFilters}
-                className="glass-btn inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-normal text-white/80 disabled:opacity-40"
+                onClick={refreshAll}
+                disabled={pageLoading}
+                title="Synchronize console datasets"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-[var(--text-2)] hover:text-[var(--text-1)] hover:bg-white/[0.08] active:scale-95 transition-all focus:outline-none"
               >
-                <FilterX className="h-3.5 w-3.5" strokeWidth={1.5} />
-                <span className="hidden sm:inline">Reset Filters</span>
+                <RefreshCw className={`h-4 w-4 ${pageLoading ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
-            )}
+            </div>
+          </div>
+        )}
 
-            <button
-              onClick={refreshAll}
-              disabled={pageLoading}
-              title="Synchronize all console datasets"
-              className="glass-btn inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white/85 shadow-sm active:scale-[0.98] disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${pageLoading ? 'animate-spin text-indigo-400' : 'text-white/50'}`} strokeWidth={1.5} />
-              <span className="hidden sm:inline">{pageLoading ? 'Syncing...' : 'Sync Console'}</span>
-            </button>
-
-            <button
-              onClick={(e) => {
-                setThemeAnchorEl(e.currentTarget);
-                setThemeOpen((prev) => !prev);
+        <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={
+                shouldReduceMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, filter: 'blur(6px)', y: 8 }
+              }
+              animate={{
+                opacity: 1,
+                filter: 'blur(0px)',
+                y: 0,
+                transition: {
+                  duration: shouldReduceMotion ? 0.15 : 0.35,
+                  ease: [0.22, 1, 0.36, 1],
+                },
               }}
-              title="Theme Settings"
-              aria-label="Theme Settings"
-              className="glass-btn inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-white/85 hover:text-white shadow-sm active:scale-[0.98]"
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 0, transition: { duration: 0.15 } }
+                  : {
+                      opacity: 0,
+                      filter: 'blur(6px)',
+                      y: -6,
+                      transition: { duration: 0.2, ease: [0.22, 1, 0.36, 1] },
+                    }
+              }
+              className="space-y-4"
             >
-              <Palette className="h-4 w-4" strokeWidth={1.5} />
-              <span className="hidden xl:inline">Theme</span>
-            </button>
-
-            <div className="hidden h-5 w-[1px] bg-white/[0.08] sm:block" />
-
-            <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs text-white/80 backdrop-blur-md">
-              <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-indigo-400/30 bg-indigo-500/25 text-[10px] font-medium text-white shadow-sm">
-                AD
-              </div>
-              <span className="hidden font-medium text-white/92 sm:inline">Admin</span>
-              <span className="hidden text-[10px] font-normal text-white/40 md:inline">(Ops Root)</span>
-            </div>
-          </div>
-        </header>
-
-        {/* Scrollable Content Workspace */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6 max-w-[1680px] w-full mx-auto">
-          {/* Global Alert Notification */}
-          {apiError ? (
-            <div className="flex items-center justify-between rounded-xl border border-rose-400/25 bg-rose-500/12 px-4 py-3 text-xs sm:text-sm text-rose-300 shadow-sm backdrop-blur-md">
-              <div className="flex items-center gap-2.5">
-                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" strokeWidth={1.5} />
-                <span>{apiError}</span>
-              </div>
-              <button
-                onClick={() => setApiError('')}
-                className="rounded-lg p-1 text-rose-400 hover:bg-rose-500/20 hover:text-rose-200"
-              >
-                <X className="h-4 w-4" strokeWidth={1.5} />
-              </button>
-            </div>
-          ) : null}
 
           {/* TAB 1: DASHBOARD */}
           {(pageLoading || summaryLoading) && activeTab === 'dashboard' ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               {Array.from({ length: 6 }).map((_, index) => (
-                <div key={index} className="card h-28 animate-pulse bg-white/[0.04]" />
+                <div key={index} className="rounded-lg p-4 h-24 animate-pulse bg-white/[0.04] border border-white/[0.08]" />
               ))}
             </div>
           ) : null}
 
           {!pageLoading && !summaryLoading && activeTab === 'dashboard' && summary ? (
             <div className="space-y-6">
-              {/* Primary Financial & Operational Metrics */}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                <StatCard
-                  label="Total Invoices"
-                  value={String(summary.totalInvoices)}
-                  icon={Receipt}
-                  variant="default"
-                  subtext="Registered invoice count"
+              {/* Pill Filter Row */}
+              <DashboardFilterRow
+                selectedCmpCode={selectedCmpCode}
+                onSelectCmpCode={(code) => {
+                  setSelectedCmpCode(code);
+                  loadSummary(code).catch((err) =>
+                    setApiError(err instanceof Error ? err.message : 'Failed to load dashboard'),
+                  );
+                  loadAllInvoices(code).catch(() => {});
+                }}
+                availableCmpCodes={availableCmpCodes}
+                route={dashboardFilters.route}
+                onSelectRoute={(r) => setDashboardFilters((prev) => ({ ...prev, route: r }))}
+                availableRoutes={availableRoutes}
+                dateFrom={dashboardFilters.dateFrom}
+                onSelectDateFrom={(d) => setDashboardFilters((prev) => ({ ...prev, dateFrom: d }))}
+                dateTo={dashboardFilters.dateTo}
+                onSelectDateTo={(d) => setDashboardFilters((prev) => ({ ...prev, dateTo: d }))}
+                search={dashboardFilters.search}
+                onSearchChange={(s) => setDashboardFilters((prev) => ({ ...prev, search: s }))}
+                onReset={() => {
+                  setSelectedCmpCode('');
+                  setDashboardFilters({ route: '', dateFrom: '', dateTo: '', search: '' });
+                  loadSummary('').catch(() => {});
+                  loadAllInvoices('').catch(() => {});
+                }}
+              />
+
+              {/* Hero Stat Cards */}
+              <HeroStatCards
+                stats={dashboardStats}
+                selectedHeroMetric={selectedHeroMetric}
+                onSelectHeroMetric={setSelectedHeroMetric}
+                onNavigateTab={handleTabChange}
+              />
+
+              {/* Main Workspace: Notched Tabs + List + Detail Split */}
+              <MainWorkspaceSection
+                workspaceTab={workspaceTab}
+                onWorkspaceTabChange={setWorkspaceTab}
+                invoices={filteredDashboardInvoices}
+                onOpenInvoice={(inv) => {
+                  handleTabChange('invoices');
+                  setInvoiceFilters((prev) => ({
+                    ...prev,
+                    invoiceNumber: inv.invoiceNumber,
+                  }));
+                  setExpandedInvoice(inv.invoiceNumber);
+                }}
+                onRecordPayment={openPaymentModal}
+              />
+
+              {/* 6 Charts & Insight Panels Below Workspace */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-2">
+                <ChartBilledVsCollected data={dashboardStats.recentMonths} />
+                <ChartPaymentStatus
+                  paid={summary.paid}
+                  partial={summary.partial}
+                  unpaid={summary.unpaid}
+                  total={summary.totalInvoices}
                 />
-                <StatCard
-                  label="Fully Paid"
-                  value={String(summary.paid)}
-                  icon={CheckCircle2}
-                  variant="success"
-                  subtext="Cleared invoices"
+                <ChartReceivablesAging aging={dashboardStats.aging} />
+                <ChartOutstandingByRoute routes={dashboardStats.topRoutes} />
+                <ChartChequePipeline
+                  cheques={cheques}
+                  onNavigateCheques={() => handleTabChange('cheques')}
                 />
-                <StatCard
-                  label="Gross Revenue"
-                  value={formatMoney(summary.revenue)}
-                  icon={TrendingUp}
-                  variant="info"
-                  subtext="Total collected funds"
+                <ChartNeedsAttention
+                  overdue60Count={overduePast60Count}
+                  pendingChequesCount={pendingChequesCount}
+                  pendingApprovalsCount={pendingApprovalsCount}
+                  undeliveredTripsCount={undeliveredTripsCount}
+                  onNavigateTab={handleTabChange}
                 />
-                <StatCard
-                  label="Operational Expenses"
-                  value={formatMoney(summary.expenses)}
-                  icon={TrendingDown}
-                  variant="danger"
-                  subtext="Logged fleet costs"
-                />
-                <StatCard
-                  label="Net Balance"
-                  value={formatMoney(summary.net)}
-                  icon={BarChart3}
-                  variant="success"
-                  subtext="Net operational cash"
-                />
-                <StatCard
-                  label="Pending Clearance"
-                  value={formatMoney(summary.pendingCollections)}
-                  icon={AlertTriangle}
-                  variant="warning"
-                  subtext="Uncollected balance"
-                />
-              </div>
-
-              {/* Driver Performance & Problem Zone Diagnostic Panels */}
-              <div className="grid gap-6 lg:grid-cols-2">
-                {/* Driver Performance Ranking */}
-                <div className="card rounded-[20px] p-5">
-                  <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-                    <div>
-                      <h3 className="text-[15px] font-medium text-white/92">Delivery Fleet Performance</h3>
-                      <p className="text-xs font-normal text-white/55">Dispatch fulfillment rates across active drivers</p>
-                    </div>
-                    <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-0.5 text-[11px] font-medium text-white/70">
-                      Top {summary.driverPerformance.slice(0, 8).length} Drivers
-                    </span>
-                  </div>
-
-                  <div className="mt-4 space-y-2.5">
-                    {summary.driverPerformance.slice(0, 8).map((d) => (
-                      <div
-                        key={d.name}
-                        className="glass-row flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 text-xs transition hover:bg-white/[0.04]"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.06] text-[11px] font-medium text-white/90">
-                            {d.name.slice(0, 2).toUpperCase()}
-                          </div>
-                          <span className="font-medium text-white/90 truncate">{d.name}</span>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <div className="hidden sm:block w-28 bg-white/[0.06] h-1.5 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                d.efficiency >= 80 ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.4)]' : d.efficiency >= 50 ? 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.4)]' : 'bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.4)]'
-                              }`}
-                              style={{ width: `${Math.min(100, Math.max(0, d.efficiency))}%` }}
-                            />
-                          </div>
-                          <span className="num-tabular font-normal text-white/60">
-                            {d.delivered} / {d.assigned}
-                          </span>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium num-tabular ${
-                              d.efficiency >= 80
-                                ? 'border border-emerald-400/25 bg-emerald-400/12 text-emerald-300'
-                                : d.efficiency >= 50
-                                ? 'border border-amber-400/25 bg-amber-400/12 text-amber-300'
-                                : 'border border-rose-400/25 bg-rose-400/12 text-rose-300'
-                            }`}
-                          >
-                            {d.efficiency}%
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                    {!summary.driverPerformance.length && (
-                      <p className="py-4 text-center text-xs text-white/40">No driver activity logged yet.</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Operational Diagnostics & Health Zone */}
-                <div className="card rounded-[20px] p-5">
-                  <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-                    <div>
-                      <h3 className="text-[15px] font-medium text-white/92">Operational Health Diagnostics</h3>
-                      <p className="text-xs font-normal text-white/55">Automated system checks on pending invoices and costs</p>
-                    </div>
-                    <span className="rounded-full border border-emerald-400/25 bg-emerald-400/12 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-                      System Healthy
-                    </span>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    <div className="glass-row flex items-center justify-between p-3.5 text-xs">
-                      <div className="flex items-center gap-2.5">
-                        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${summary.problemZone.highPendingInvoices ? 'border border-rose-400/25 bg-rose-400/12 text-rose-300' : 'border border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                          {summary.problemZone.highPendingInvoices ? <AlertTriangle className="h-4 w-4" strokeWidth={1.5} /> : <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />}
-                        </div>
-                        <div>
-                          <p className="font-medium text-white/90">Pending Invoice Ratio</p>
-                          <p className="text-[11px] font-normal text-white/50">Clearance status across open invoices</p>
-                        </div>
-                      </div>
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${summary.problemZone.highPendingInvoices ? 'border-rose-400/25 bg-rose-400/12 text-rose-300' : 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                        {summary.problemZone.highPendingInvoices ? 'High Backlog' : 'Nominal'}
-                      </span>
-                    </div>
-
-                    <div className="glass-row flex items-center justify-between p-3.5 text-xs">
-                      <div className="flex items-center gap-2.5">
-                        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${summary.problemZone.lowPerformingDrivers.length > 0 ? 'border border-amber-400/25 bg-amber-400/12 text-amber-300' : 'border border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                          {summary.problemZone.lowPerformingDrivers.length > 0 ? <AlertCircle className="h-4 w-4" strokeWidth={1.5} /> : <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />}
-                        </div>
-                        <div>
-                          <p className="font-medium text-white/90">Driver Efficiency Thresholds</p>
-                          <p className="text-[11px] font-normal text-white/50">Drivers below 50% fulfillment</p>
-                        </div>
-                      </div>
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${summary.problemZone.lowPerformingDrivers.length > 0 ? 'border-amber-400/25 bg-amber-400/12 text-amber-300' : 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                        {summary.problemZone.lowPerformingDrivers.length > 0 ? `${summary.problemZone.lowPerformingDrivers.length} Flagged` : 'All Optimal'}
-                      </span>
-                    </div>
-
-                    <div className="glass-row flex items-center justify-between p-3.5 text-xs">
-                      <div className="flex items-center gap-2.5">
-                        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${summary.problemZone.highExpenses ? 'border border-rose-400/25 bg-rose-400/12 text-rose-300' : 'border border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                          {summary.problemZone.highExpenses ? <TrendingDown className="h-4 w-4" strokeWidth={1.5} /> : <CheckCircle2 className="h-4 w-4" strokeWidth={1.5} />}
-                        </div>
-                        <div>
-                          <p className="font-medium text-white/90">Fleet Expense Tolerance</p>
-                          <p className="text-[11px] font-normal text-white/50">Expenditure ratio relative to collections</p>
-                        </div>
-                      </div>
-                      <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${summary.problemZone.highExpenses ? 'border-rose-400/25 bg-rose-400/12 text-rose-300' : 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300'}`}>
-                        {summary.problemZone.highExpenses ? 'Elevated Costs' : 'Within Budget'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           ) : null}
@@ -3024,7 +3031,7 @@ export default function LogisticsApp() {
           {!pageLoading && activeTab === 'importExport' ? (
             <div className="space-y-6">
               {/* Import Excel Panel */}
-              <div className="card rounded-[20px] p-6">
+              <div className="card rounded-xl p-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
                   <div>
                     <h3 className="text-base font-medium text-white/92">Import Invoices from Excel</h3>
@@ -3046,7 +3053,7 @@ export default function LogisticsApp() {
 
                 {importMessage && (
                   <div className="mt-4 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2.5 text-xs text-white/80 flex items-center gap-2">
-                    <Info className="h-4 w-4 text-indigo-400 shrink-0" strokeWidth={1.5} />
+                    <Info className="h-4 w-4 text-[var(--accent-solid)] shrink-0" strokeWidth={1.5} />
                     <span>{importMessage}</span>
                   </div>
                 )}
@@ -3119,7 +3126,7 @@ export default function LogisticsApp() {
               </div>
 
               {/* Export Data Console Panel */}
-              <div className="card rounded-[20px] p-6">
+              <div className="card rounded-xl p-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
                   <div>
                     <h3 className="text-base font-medium text-white/92">Export Ledger Datasets (.xlsx)</h3>
@@ -3142,22 +3149,24 @@ export default function LogisticsApp() {
                     <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">
                       From Date
                     </label>
-                    <input
-                      type="date"
+                    <GlassDateInput
                       value={exportFilters.dateFrom}
-                      onChange={(e) => setExportFilters((prev) => ({ ...prev, dateFrom: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 text-xs"
+                      onChange={(val) => setExportFilters((prev) => ({ ...prev, dateFrom: val }))}
+                      placeholder="From date"
+                      partnerDate={exportFilters.dateTo}
+                      isFromDate={true}
                     />
                   </div>
                   <div>
                     <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">
                       To Date
                     </label>
-                    <input
-                      type="date"
+                    <GlassDateInput
                       value={exportFilters.dateTo}
-                      onChange={(e) => setExportFilters((prev) => ({ ...prev, dateTo: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 text-xs"
+                      onChange={(val) => setExportFilters((prev) => ({ ...prev, dateTo: val }))}
+                      placeholder="To date"
+                      partnerDate={exportFilters.dateFrom}
+                      isFromDate={false}
                     />
                   </div>
                   <div>
@@ -3205,7 +3214,7 @@ export default function LogisticsApp() {
                             isSelected ? 'glass-pill-active' : 'glass-pill'
                           }`}
                         >
-                          <span className={`h-2 w-2 rounded-full ${isSelected ? 'bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-white/30'}`} />
+                          <span className={`h-2 w-2 rounded-full ${isSelected ? 'bg-[var(--accent-solid)]' : 'bg-white/30'}`} />
                           {key}
                         </button>
                       );
@@ -3227,7 +3236,7 @@ export default function LogisticsApp() {
           {!pageLoading && activeTab === 'trips' ? (
             <div className="space-y-6">
               {/* Delivery Agent Management Header */}
-              <div className="card rounded-[20px] p-5">
+              <div className="card rounded-xl p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-medium text-white/92">Delivery Fleet & Agents</h3>
@@ -3256,7 +3265,7 @@ export default function LogisticsApp() {
               {/* Main Trip Sheets Operations Layout */}
               <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
                 {/* Agent Selector Column */}
-                <div className="card rounded-[20px] p-4 space-y-3">
+                <div className="card rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between border-b border-white/[0.06] pb-2">
                     <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-white/45">Select Driver</p>
                     <span className="text-[10px] text-white/50 num-tabular font-normal">{agents.length} active</span>
@@ -3271,13 +3280,13 @@ export default function LogisticsApp() {
                           onClick={() => setSelectedAgentId(a._id)}
                           className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-xs transition ${
                             isSelected
-                              ? 'border border-indigo-400/35 bg-indigo-500/18 text-white/95 font-medium shadow-sm'
+                              ? 'border border-[var(--accent-border)] bg-[var(--accent-soft)] text-white/95 font-medium shadow-sm'
                               : 'text-white/70 hover:bg-white/[0.04] hover:text-white border border-transparent'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-medium ${
-                              isSelected ? 'bg-indigo-500/30 border border-indigo-400/40 text-white' : 'border border-white/[0.08] bg-white/[0.06] text-white/80'
+                              isSelected ? 'bg-[var(--accent-soft)] border border-[var(--accent-border)] text-white' : 'border border-white/[0.08] bg-white/[0.06] text-white/80'
                             }`}>
                               {a.name.slice(0, 2).toUpperCase()}
                             </div>
@@ -3286,7 +3295,7 @@ export default function LogisticsApp() {
                               <p className="truncate text-[10px] text-white/40">@{a.username || 'driver'}</p>
                             </div>
                           </div>
-                          {isSelected && <ChevronRight className="h-4 w-4 text-indigo-400" strokeWidth={1.5} />}
+                          {isSelected && <ChevronRight className="h-4 w-4 text-[var(--accent-solid)]" strokeWidth={1.5} />}
                         </button>
                       );
                     })}
@@ -3295,7 +3304,7 @@ export default function LogisticsApp() {
                 </div>
 
                 {/* Right Column: New Dispatch vs Past Trips */}
-                <div className="card rounded-[20px] min-w-0 p-5 space-y-4">
+                <div className="card rounded-xl min-w-0 p-5 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
                     <div className="min-w-0">
                       <h3 className="truncate text-base font-medium text-white/92">
@@ -3380,7 +3389,7 @@ export default function LogisticsApp() {
                             Include Same Shops
                           </button>
                         </div>
-                        <span className="font-medium text-indigo-300 num-tabular">
+                        <span className="font-medium text-[var(--accent-solid)] num-tabular">
                           {tripSelected.length} invoices selected
                         </span>
                       </div>
@@ -3390,15 +3399,15 @@ export default function LogisticsApp() {
 
                       {/* Pending Pool Table */}
                       <div className="table-wrapper max-h-96 rounded-xl border border-white/[0.06]">
-                        <table className="min-w-full text-xs">
-                          <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/50 font-medium border-b border-white/[0.06] z-10">
+                        <table className="sgb-table min-w-full">
+                          <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/75 font-medium border-b border-white/[0.06] z-10">
                             <tr>
                               <th className="px-3 py-2.5 text-left w-10">
                                 <input
                                   type="checkbox"
                                   checked={filteredPendingPool.length > 0 && tripSelected.length >= filteredPendingPool.length}
                                   onChange={(e) => selectVisibleTrips(e.target.checked)}
-                                  className="rounded border-white/20 bg-white/10 text-indigo-500"
+                                  className="rounded border-white/20 bg-white/10 accent-[var(--accent-solid)]"
                                 />
                               </th>
                               <th className="px-3 py-2.5 text-left">
@@ -3489,14 +3498,14 @@ export default function LogisticsApp() {
                                       isChecked ? prev.filter((id) => id !== row._id) : [...prev, row._id],
                                     )
                                   }
-                                  className={`cursor-pointer transition ${isChecked ? 'bg-indigo-500/12' : 'hover:bg-white/[0.04]'}`}
+                                  className={`cursor-pointer transition ${isChecked ? 'bg-[var(--accent-soft)]' : 'hover:bg-white/[0.04]'}`}
                                 >
                                   <td className="px-3 py-2">
                                     <input
                                       type="checkbox"
                                       checked={isChecked}
                                       onChange={() => {}}
-                                      className="rounded border-white/20 bg-white/10 text-indigo-500"
+                                      className="rounded border-white/20 bg-white/10 accent-[var(--accent-solid)]"
                                     />
                                   </td>
                                   <td className="px-3 py-2 num-tabular font-medium text-white/92">{row.invoiceNumber}</td>
@@ -3504,14 +3513,10 @@ export default function LogisticsApp() {
                                   <td className="px-3 py-2 text-white/50">{row.route || '-'}</td>
                                   <td className="px-3 py-2 font-medium num-tabular text-white/95">{formatMoney(row.totalAmount)}</td>
                                   <td className="px-3 py-2">
-                                    <Badge className={tripDeliveryBadgeClass(row.deliveryStatus)}>
-                                      {tripDeliveryCode(row.deliveryStatus)}
-                                    </Badge>
+                                    <StatusChip status={row.deliveryStatus} type="delivery" />
                                   </td>
                                   <td className="px-3 py-2">
-                                    <Badge className={tripPaymentBadgeClass(row.paymentStatus)}>
-                                      {tripPaymentLabel(row.paymentStatus)}
-                                    </Badge>
+                                    <StatusChip status={row.paymentStatus} type="payment" />
                                   </td>
                                 </tr>
                               );
@@ -3529,12 +3534,12 @@ export default function LogisticsApp() {
 
                       {/* Sticky Dispatch Summary Footer */}
                       {tripSelected.length > 0 && (
-                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-indigo-400/25 bg-indigo-500/12 p-4 shadow-sm backdrop-blur-md">
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 shadow-sm backdrop-blur-md">
                           <div>
                             <p className="text-xs font-medium text-white/95">
                               Ready to Dispatch: {tripSelected.length} Invoices to {selectedAgent ? selectedAgent.name : 'Selected Driver'}
                             </p>
-                            <p className="text-xs text-indigo-200 num-tabular mt-0.5 font-normal">
+                            <p className="text-xs text-[var(--text-2)] num-tabular mt-0.5 font-normal">
                               Cumulative Itinerary Amount: {formatMoney(
                                 pendingPool
                                   .filter((p) => tripSelected.includes(p._id))
@@ -3556,17 +3561,19 @@ export default function LogisticsApp() {
                     /* Past Trip Sheets */
                     <div className="space-y-3">
                       <div className="grid gap-2 sm:grid-cols-3">
-                        <input
-                          type="date"
+                        <GlassDateInput
                           value={tripFilters.dateFrom}
-                          onChange={(e) => setTripFilters((p) => ({ ...p, dateFrom: e.target.value }))}
-                          className="glass-input px-3 py-1.5 text-xs"
+                          onChange={(val) => setTripFilters((p) => ({ ...p, dateFrom: val }))}
+                          placeholder="From date"
+                          partnerDate={tripFilters.dateTo}
+                          isFromDate={true}
                         />
-                        <input
-                          type="date"
+                        <GlassDateInput
                           value={tripFilters.dateTo}
-                          onChange={(e) => setTripFilters((p) => ({ ...p, dateTo: e.target.value }))}
-                          className="glass-input px-3 py-1.5 text-xs"
+                          onChange={(val) => setTripFilters((p) => ({ ...p, dateTo: val }))}
+                          placeholder="To date"
+                          partnerDate={tripFilters.dateFrom}
+                          isFromDate={false}
                         />
                         <input
                           value={tripFilters.driver}
@@ -3631,9 +3638,7 @@ export default function LogisticsApp() {
                                         <td className="px-3 py-1.5 text-white/50">{inv.route || '-'}</td>
                                         <td className="px-3 py-1.5 font-medium num-tabular text-white/95">{formatMoney(inv.totalAmount)}</td>
                                         <td className="px-3 py-1.5">
-                                          <Badge className={statusBadgeClass(inv.deliveryStatus)}>
-                                            {inv.deliveryStatus}
-                                          </Badge>
+                                          <StatusChip status={inv.deliveryStatus} type="delivery" />
                                         </td>
                                       </tr>
                                     ))}
@@ -3663,7 +3668,7 @@ export default function LogisticsApp() {
 
           {!pageLoading && activeTab === 'approvals' ? (
             <div className="space-y-6">
-              <div className="card rounded-[20px] p-5">
+              <div className="card rounded-xl p-5">
                 <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
                   <div>
                     <h3 className="text-base font-medium text-white/92">Pending Financial Approvals</h3>
@@ -3693,9 +3698,10 @@ export default function LogisticsApp() {
                           <button
                             onClick={() => runAction(`approve-group-${group.key}`, async () => approveGroup(group.rows.map((row) => row._id)))}
                             disabled={isActionLoading(`approve-group-${group.key}`)}
-                            className="glass-btn-primary rounded-xl px-3 py-1.5 text-xs font-medium text-white shadow-sm disabled:opacity-50"
+                            className="h-9 px-4 rounded-full text-[13px] font-medium bg-[var(--accent-solid)] text-[var(--on-accent)] inline-flex items-center gap-1.5 hover:opacity-90 active:scale-98 transition shadow-sm focus:outline-none disabled:opacity-50"
                           >
-                            {isActionLoading(`approve-group-${group.key}`) ? 'Approving...' : 'Approve All Claims'}
+                            <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                            <span>{isActionLoading(`approve-group-${group.key}`) ? 'Approving...' : 'Approve All Claims'}</span>
                           </button>
                           <button
                             onClick={() =>
@@ -3726,16 +3732,16 @@ export default function LogisticsApp() {
                         </div>
                         <div>
                           <span className="text-[10px] uppercase tracking-[0.08em] text-white/40 block font-medium">Actual Total</span>
-                          <span className="font-medium text-indigo-300 num-tabular">{formatMoney(group.totals.actual)}</span>
+                          <span className="font-medium text-[var(--accent-solid)] num-tabular">{formatMoney(group.totals.actual)}</span>
                         </div>
                       </div>
 
                       {expandedApprovalGroups.includes(group.key) && (
                         <div className="table-wrapper">
-                          <table className="min-w-full text-xs">
-                            <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/50 font-medium border-b border-white/[0.06] z-10">
+                          <table className="sgb-table min-w-full">
+                            <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/75 font-medium border-b border-white/[0.06] z-10">
                               <tr>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Shop Name"
                                     filterType="text"
@@ -3747,7 +3753,7 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('shopName')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Invoice #"
                                     filterType="text"
@@ -3759,7 +3765,7 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('invoiceNumber')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Actual"
                                     filterType="amount"
@@ -3771,7 +3777,7 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('totalAmount')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Received"
                                     filterType="amount"
@@ -3783,7 +3789,7 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('amount')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Mode"
                                     filterType="enum"
@@ -3796,7 +3802,7 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('mode')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left">
+                                <th className="px-4 py-2 text-left">
                                   <ColumnFilterHeader
                                     label="Deductions"
                                     filterType="amount"
@@ -3808,35 +3814,75 @@ export default function LogisticsApp() {
                                     onSort={() => toggleApprovalSort('deductedAmount')}
                                   />
                                 </th>
-                                <th className="px-3 py-2 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Action</th>
+                                <th className="px-4 py-2 text-left min-w-[210px]">Action</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/[0.06]">
                               {group.rows.map((approval) => (
                                 <tr key={approval._id} className="hover:bg-white/[0.04]">
-                                  <td className="px-3 py-2 font-normal text-white/90">{approval.payload.shopName || '-'}</td>
-                                  <td className="px-3 py-2 num-tabular text-white/70">{approval.payload.invoiceNumber || '-'}</td>
-                                  <td className="px-3 py-2 num-tabular text-white/80">{formatMoney(Number(approval.payload?.totalAmount || 0))}</td>
-                                  <td className="px-3 py-2 font-medium num-tabular text-emerald-400">{formatMoney(Number(approval.payload?.amount || 0))}</td>
-                                  <td className="px-3 py-2 uppercase font-medium text-white/70">{approval.payload.mode || '-'}</td>
-                                  <td className="px-3 py-2 text-white/50 num-tabular">
+                                  <td className="px-4 py-2 font-medium text-[0.9375rem] text-[var(--text-1)]">{approval.payload.shopName || '-'}</td>
+                                  <td className="px-4 py-2 num-tabular font-medium text-[0.90625rem] text-[var(--text-1)]">{approval.payload.invoiceNumber || '-'}</td>
+                                  <td className="px-4 py-2 num-tabular font-normal text-[0.875rem] text-[var(--table-body-sec-color)]">{formatMoney(Number(approval.payload?.totalAmount || 0))}</td>
+                                  <td className="px-4 py-2 font-medium num-tabular text-emerald-400">{formatMoney(Number(approval.payload?.amount || 0))}</td>
+                                  <td className="px-4 py-2 uppercase font-medium text-white/70">{approval.payload.mode || '-'}</td>
+                                  <td className="px-4 py-2 text-[var(--table-body-sec-color)] num-tabular text-[0.875rem]">
                                     {formatMoney(Number(approval.payload?.deductedAmount || 0))}
                                   </td>
-                                  <td className="px-3 py-2">
-                                    <div className="flex items-center gap-1.5">
+                                  <td className="px-4 py-2 min-w-[210px]">
+                                    <div className="flex items-center gap-2 whitespace-nowrap">
                                       <button
-                                        onClick={() => runAction(`approve-${approval._id}`, async () => approveItem(approval._id))}
+                                        onClick={(e) => {
+                                          setConfirmApproval({
+                                            approval: {
+                                              _id: approval._id,
+                                              type: 'Payment claim',
+                                              shopName: approval.payload?.shopName,
+                                              invoiceNumber: approval.payload?.invoiceNumber,
+                                              amount: Number(approval.payload?.amount || 0),
+                                              requester: approval.payload?.driverName || approval.payload?.collectedBy,
+                                              mode: approval.payload?.mode,
+                                              date: approval.payload?.date,
+                                            },
+                                            actionType: 'approve',
+                                            anchorEl: e.currentTarget,
+                                          });
+                                        }}
                                         disabled={isActionLoading(`approve-${approval._id}`)}
-                                        className="rounded-lg border border-emerald-400/25 bg-emerald-400/12 px-2 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-50"
+                                        className="btn-approve"
                                       >
-                                        Approve
+                                        {isActionLoading(`approve-${approval._id}`) ? (
+                                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Check className="h-3.5 w-3.5" strokeWidth={2} />
+                                        )}
+                                        <span>Approve</span>
                                       </button>
                                       <button
-                                        onClick={() => runAction(`reject-${approval._id}`, async () => rejectItem(approval._id))}
+                                        onClick={(e) => {
+                                          setConfirmApproval({
+                                            approval: {
+                                              _id: approval._id,
+                                              type: 'Payment claim',
+                                              shopName: approval.payload?.shopName,
+                                              invoiceNumber: approval.payload?.invoiceNumber,
+                                              amount: Number(approval.payload?.amount || 0),
+                                              requester: approval.payload?.driverName || approval.payload?.collectedBy,
+                                              mode: approval.payload?.mode,
+                                              date: approval.payload?.date,
+                                            },
+                                            actionType: 'reject',
+                                            anchorEl: e.currentTarget,
+                                          });
+                                        }}
                                         disabled={isActionLoading(`reject-${approval._id}`)}
-                                        className="rounded-lg bg-rose-500/12 border border-rose-400/25 px-2 py-1 text-[11px] font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                                        className="btn-reject"
                                       >
-                                        Reject
+                                        {isActionLoading(`reject-${approval._id}`) ? (
+                                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <X className="h-3.5 w-3.5" strokeWidth={2} />
+                                        )}
+                                        <span>Reject</span>
                                       </button>
                                     </div>
                                   </td>
@@ -3864,7 +3910,7 @@ export default function LogisticsApp() {
           ) : null}
 
           {!pageLoading && activeTab === 'cheques' ? (
-            <div className="card rounded-[20px] overflow-hidden">
+            <div className="card rounded-xl overflow-hidden">
               <div className="border-b border-white/[0.06] px-6 py-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-medium text-white/92">Cheque Clearance & Reconciliations</h3>
@@ -3899,11 +3945,10 @@ export default function LogisticsApp() {
                   placeholder="Cheque #"
                   className="glass-input px-3 py-2 text-xs"
                 />
-                <input
-                  type="date"
+                <GlassDateInput
                   value={manualChequeForm.date}
-                  onChange={(e) => setManualChequeForm((p) => ({ ...p, date: e.target.value }))}
-                  className="glass-input px-3 py-2 text-xs"
+                  onChange={(val) => setManualChequeForm((p) => ({ ...p, date: val }))}
+                  placeholder="Cheque date"
                 />
                 <input
                   value={manualChequeForm.bankName}
@@ -3932,10 +3977,10 @@ export default function LogisticsApp() {
 
               {/* Cheques Ledger Table */}
               <div className="table-wrapper">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/50 font-medium border-b border-white/[0.06] z-10">
+                <table className="sgb-table min-w-full">
+                  <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/75 font-medium border-b border-white/[0.06] z-10">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Cheque #"
                           filterType="text"
@@ -3947,7 +3992,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('chequeNumber')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Invoice #"
                           filterType="text"
@@ -3959,7 +4004,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('invoiceNumber')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Bank"
                           filterType="text"
@@ -3971,7 +4016,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('bankName')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Date"
                           filterType="date"
@@ -3983,7 +4028,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('date')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Amount"
                           filterType="amount"
@@ -3995,7 +4040,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('amount')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Lifecycle"
                           filterType="enum"
@@ -4017,29 +4062,19 @@ export default function LogisticsApp() {
                           onSort={() => toggleChequeSort('status')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Update Status</th>
+                      <th className="px-4 py-3 text-left">Update Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/[0.06]">
                     {filteredCheques.map((c) => (
                       <tr key={c._id} className="hover:bg-white/[0.04]">
-                        <td className="px-4 py-3 num-tabular font-medium text-white/92">{c.chequeNumber}</td>
-                        <td className="px-4 py-3 num-tabular text-white/80">{c.invoiceNumber}</td>
-                        <td className="px-4 py-3 font-normal text-white/85">{c.bankName}</td>
-                        <td className="px-4 py-3 text-white/50 num-tabular">{formatDateTime(c.date)}</td>
-                        <td className="px-4 py-3 font-medium num-tabular text-white/95">{formatMoney(c.amount)}</td>
+                        <td className="px-4 py-3 num-tabular font-medium text-[0.90625rem] text-[var(--text-1)]">{c.chequeNumber}</td>
+                        <td className="px-4 py-3 num-tabular font-medium text-[0.90625rem] text-[var(--text-1)]">{c.invoiceNumber}</td>
+                        <td className="px-4 py-3 font-normal text-[0.875rem] text-[var(--table-body-sec-color)]">{c.bankName}</td>
+                        <td className="px-4 py-3 text-[var(--table-body-sec-color)] num-tabular text-[0.875rem]">{formatDateTime(c.date)}</td>
+                        <td className="px-4 py-3 font-medium num-tabular text-[0.9375rem] text-[var(--text-1)]">{formatMoney(c.amount)}</td>
                         <td className="px-4 py-3">
-                          <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium capitalize ${
-                            c.status === 'cleared'
-                              ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-300'
-                              : c.status === 'deposited'
-                              ? 'border-sky-400/25 bg-sky-400/12 text-sky-300'
-                              : c.status === 'bounced'
-                              ? 'border-rose-400/25 bg-rose-400/12 text-rose-300'
-                              : 'border-amber-400/25 bg-amber-400/12 text-amber-300'
-                          }`}>
-                            {c.status}
-                          </span>
+                          <StatusChip status={c.status} type="cheque" />
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">
@@ -4122,16 +4157,54 @@ export default function LogisticsApp() {
                         <p className="text-white/70 mt-1 italic font-normal">{approval.payload?.notes || '-'}</p>
                         <div className="mt-3 flex items-center gap-2">
                           <button
-                            onClick={() => runAction(`approve-${approval._id}`, async () => approveItem(approval._id))}
-                            className="flex-1 rounded-lg border border-emerald-400/25 bg-emerald-400/12 py-1.5 text-center font-medium text-emerald-300 hover:bg-emerald-400/20"
+                            onClick={(e) => {
+                              setConfirmApproval({
+                                approval: {
+                                  _id: approval._id,
+                                  type: approval.payload?.type || approval.payload?.category || 'Expense claim',
+                                  amount: Number(approval.payload?.amount || 0),
+                                  requester: approval.payload?.addedBy || 'Driver',
+                                  date: approval.payload?.date,
+                                  notes: approval.payload?.notes,
+                                },
+                                actionType: 'approve',
+                                anchorEl: e.currentTarget,
+                              });
+                            }}
+                            disabled={isActionLoading(`approve-${approval._id}`)}
+                            className="btn-approve flex-1 justify-center"
                           >
-                            Approve
+                            {isActionLoading(`approve-${approval._id}`) ? (
+                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="h-3.5 w-3.5" strokeWidth={2} />
+                            )}
+                            <span>Approve</span>
                           </button>
                           <button
-                            onClick={() => runAction(`reject-${approval._id}`, async () => rejectItem(approval._id))}
-                            className="flex-1 rounded-lg border border-rose-400/25 bg-rose-500/12 py-1.5 text-center font-medium text-rose-300 hover:bg-rose-500/20"
+                            onClick={(e) => {
+                              setConfirmApproval({
+                                approval: {
+                                  _id: approval._id,
+                                  type: approval.payload?.type || approval.payload?.category || 'Expense claim',
+                                  amount: Number(approval.payload?.amount || 0),
+                                  requester: approval.payload?.addedBy || 'Driver',
+                                  date: approval.payload?.date,
+                                  notes: approval.payload?.notes,
+                                },
+                                actionType: 'reject',
+                                anchorEl: e.currentTarget,
+                              });
+                            }}
+                            disabled={isActionLoading(`reject-${approval._id}`)}
+                            className="btn-reject flex-1 justify-center"
                           >
-                            Reject
+                            {isActionLoading(`reject-${approval._id}`) ? (
+                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <X className="h-3.5 w-3.5" strokeWidth={2} />
+                            )}
+                            <span>Reject</span>
                           </button>
                         </div>
                       </div>
@@ -4140,13 +4213,31 @@ export default function LogisticsApp() {
                 </div>
               )}
 
+              {/* Approval Confirmation Popover with Slide-to-Confirm */}
+              {confirmApproval && (
+                <ApprovalConfirmPopover
+                  isOpen={Boolean(confirmApproval)}
+                  onClose={() => setConfirmApproval(null)}
+                  anchorEl={confirmApproval.anchorEl}
+                  approval={confirmApproval.approval}
+                  actionType={confirmApproval.actionType}
+                  onExecute={async () => {
+                    const id = confirmApproval.approval._id;
+                    if (confirmApproval.actionType === 'approve') {
+                      await runAction(`approve-${id}`, async () => approveItem(id));
+                    } else {
+                      await runAction(`reject-${id}`, async () => rejectItem(id));
+                    }
+                  }}
+                />
+              )}
+
               {/* Add Expense Form Grid */}
               <div className="grid gap-2.5 border-b border-white/[0.06] bg-white/[0.025] p-4 sm:grid-cols-2 lg:grid-cols-5 text-xs">
-                <input
-                  type="date"
+                <GlassDateInput
                   value={expenseForm.date}
-                  onChange={(e) => setExpenseForm((p) => ({ ...p, date: e.target.value }))}
-                  className="glass-input px-3 py-2 text-xs"
+                  onChange={(val) => setExpenseForm((p) => ({ ...p, date: val }))}
+                  placeholder="Expense date"
                 />
                 <input
                   type="number"
@@ -4187,10 +4278,10 @@ export default function LogisticsApp() {
 
               {/* Expense Records Table */}
               <div className="table-wrapper">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/50 font-medium border-b border-white/[0.06] z-10">
+                <table className="sgb-table min-w-full">
+                  <thead className="bg-white/[0.06] backdrop-blur-md sticky top-0 text-white/75 font-medium border-b border-white/[0.06] z-10">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Date"
                           filterType="date"
@@ -4202,7 +4293,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleExpenseSort('date')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Amount"
                           filterType="amount"
@@ -4214,7 +4305,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleExpenseSort('amount')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Category"
                           filterType="enum"
@@ -4227,7 +4318,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleExpenseSort('category')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Logged By"
                           filterType="text"
@@ -4239,7 +4330,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleExpenseSort('addedBy')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Notes"
                           filterType="text"
@@ -4251,7 +4342,7 @@ export default function LogisticsApp() {
                           onSort={() => toggleExpenseSort('notes')}
                         />
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
+                      <th className="px-4 py-3 text-left">
                         <ColumnFilterHeader
                           label="Status"
                           filterType="enum"
@@ -4269,11 +4360,11 @@ export default function LogisticsApp() {
                   <tbody className="divide-y divide-white/[0.06]">
                     {filteredExpenses.map((e) => (
                       <tr key={e._id} className="hover:bg-white/[0.04]">
-                        <td className="px-4 py-3 num-tabular text-white/50 font-normal">{e.date}</td>
-                        <td className="px-4 py-3 font-medium num-tabular text-white/95">{formatMoney(e.amount)}</td>
-                        <td className="px-4 py-3 font-normal text-white/90">{e.category}</td>
-                        <td className="px-4 py-3 text-white/70 font-normal">{e.addedBy}</td>
-                        <td className="px-4 py-3 text-white/50 font-normal">{e.notes || '-'}</td>
+                        <td className="px-4 py-3 num-tabular text-[0.875rem] text-[var(--table-body-sec-color)] font-normal">{e.date}</td>
+                        <td className="px-4 py-3 font-medium num-tabular text-[0.9375rem] text-[var(--text-1)]">{formatMoney(e.amount)}</td>
+                        <td className="px-4 py-3 font-normal text-[0.90625rem] text-[var(--text-1)]">{e.category}</td>
+                        <td className="px-4 py-3 text-[var(--table-body-sec-color)] text-[0.875rem] font-normal">{e.addedBy}</td>
+                        <td className="px-4 py-3 text-[var(--table-body-sec-color)] text-[0.875rem] font-normal">{e.notes || '-'}</td>
                         <td className="px-4 py-3">
                           <span className="rounded-full border border-emerald-400/25 bg-emerald-400/12 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
                             Approved
@@ -4298,16 +4389,16 @@ export default function LogisticsApp() {
 
           {/* Delivery Status Modal */}
           {showDeliveryModal && deliveryModalInvoice ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in">
-              <div className="w-full max-w-md card rounded-[20px] p-6 shadow-panel backdrop-blur-2xl text-white">
-                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+              <div className="w-full max-w-md rounded-[24px] p-6 border border-white/[0.14] bg-[#0e1014] text-zinc-100 shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-sky-400/25 bg-sky-400/12 text-sky-300">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-zinc-400">
                       <Truck className="h-4 w-4" strokeWidth={1.5} />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-white/92">Mark as Delivered</h3>
-                      <p className="text-[11px] text-white/50 num-tabular font-normal">Invoice #{deliveryModalInvoice.invoiceNumber}</p>
+                      <h3 className="text-sm font-medium text-zinc-100">Mark as delivered</h3>
+                      <p className="text-xs text-zinc-500 num-tabular font-normal">Invoice #{deliveryModalInvoice.invoiceNumber}</p>
                     </div>
                   </div>
                   <button
@@ -4315,7 +4406,7 @@ export default function LogisticsApp() {
                       setShowDeliveryModal(false);
                       setDeliveryModalInvoice(null);
                     }}
-                    className="rounded-lg p-1 text-white/40 hover:bg-white/[0.06] hover:text-white"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
                   >
                     <X className="h-4 w-4" strokeWidth={1.5} />
                   </button>
@@ -4323,8 +4414,8 @@ export default function LogisticsApp() {
 
                 <div className="mt-4 space-y-3">
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">
-                      Delivery Person / Driver Name
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">
+                      Delivery person / driver name
                     </label>
                     <input
                       value={deliveryForm.deliveryPerson}
@@ -4333,7 +4424,7 @@ export default function LogisticsApp() {
                         if (deliveryFormError) setDeliveryFormError('');
                       }}
                       placeholder="e.g. Ramesh"
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs"
                     />
                   </div>
                   {deliveryFormError && (
@@ -4347,16 +4438,16 @@ export default function LogisticsApp() {
                       setShowDeliveryModal(false);
                       setDeliveryModalInvoice(null);
                     }}
-                    className="glass-btn px-4 py-2 text-xs font-normal text-white/70 hover:text-white"
+                    className="glass-btn rounded-lg px-3.5 py-1.5 text-xs font-normal text-zinc-400 hover:text-zinc-200"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => runAction('save-delivery-status', async () => submitDeliveredStatusUpdate())}
                     disabled={isActionLoading('save-delivery-status')}
-                    className="glass-btn-primary px-4 py-2 text-xs font-medium text-white shadow-sm disabled:opacity-50"
+                    className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm disabled:opacity-50 transition"
                   >
-                    {isActionLoading('save-delivery-status') ? 'Saving...' : 'Confirm Delivered'}
+                    {isActionLoading('save-delivery-status') ? 'Saving...' : 'Confirm delivered'}
                   </button>
                 </div>
               </div>
@@ -4365,21 +4456,21 @@ export default function LogisticsApp() {
 
           {/* Payment Modal */}
           {showPaymentModal && paymentModalInvoice ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in">
-              <div className="w-full max-w-lg card rounded-[20px] p-6 shadow-panel backdrop-blur-2xl text-white">
-                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+              <div className="w-full max-w-lg rounded-[24px] p-6 border border-white/[0.14] bg-[#0e1014] text-zinc-100 shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-400/25 bg-emerald-400/12 text-emerald-300">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-zinc-400">
                       <CreditCard className="h-4 w-4" strokeWidth={1.5} />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-white/92">Add Payment Receipt</h3>
-                      <p className="text-[11px] text-white/50 num-tabular font-normal">Invoice #{paymentModalInvoice.invoiceNumber} · {paymentModalInvoice.shopName}</p>
+                      <h3 className="text-sm font-medium text-zinc-100">Add payment receipt</h3>
+                      <p className="text-xs text-zinc-500 num-tabular font-normal">Invoice #{paymentModalInvoice.invoiceNumber} · {paymentModalInvoice.shopName}</p>
                     </div>
                   </div>
                   <button
                     onClick={() => setShowPaymentModal(false)}
-                    className="rounded-lg p-1 text-white/40 hover:bg-white/[0.06] hover:text-white"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
                   >
                     <X className="h-4 w-4" strokeWidth={1.5} />
                   </button>
@@ -4387,58 +4478,57 @@ export default function LogisticsApp() {
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 text-xs">
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Payment Mode</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Payment mode</label>
                     <select
                       value={paymentForm.mode}
                       onChange={(e) => setPaymentForm((p) => ({ ...p, mode: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 text-white"
+                      className="glass-input w-full px-3 py-2 text-zinc-200"
                     >
-                      <option value="cash" className="bg-[#0f172a] text-white">Cash</option>
-                      <option value="upi" className="bg-[#0f172a] text-white">UPI Digital</option>
-                      <option value="cheque" className="bg-[#0f172a] text-white">Bank Cheque</option>
-                      <option value="credit_note" className="bg-[#0f172a] text-white">Credit Note</option>
+                      <option value="cash" className="bg-[#0b1a12] text-zinc-200">Cash</option>
+                      <option value="upi" className="bg-[#0b1a12] text-zinc-200">UPI Digital</option>
+                      <option value="cheque" className="bg-[#0b1a12] text-zinc-200">Bank Cheque</option>
+                      <option value="credit_note" className="bg-[#0b1a12] text-zinc-200">Credit Note</option>
                     </select>
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Received Amount (INR)</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Received amount (INR)</label>
                     <input
                       type="number"
                       value={paymentForm.amount}
                       onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 num-tabular font-medium text-white"
+                      className="glass-input w-full px-3 py-2 num-tabular font-medium text-zinc-100"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Collected By</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Collected by</label>
                     <input
                       value={paymentForm.receivedBy}
                       onChange={(e) => setPaymentForm((p) => ({ ...p, receivedBy: e.target.value }))}
                       placeholder="e.g. Ramesh"
-                      className="glass-input w-full px-3 py-2 text-white"
+                      className="glass-input w-full px-3 py-2 text-zinc-200"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Receipt Date</label>
-                    <input
-                      type="date"
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Receipt date</label>
+                    <GlassDateInput
                       value={paymentForm.date}
-                      onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 text-white"
+                      onChange={(val) => setPaymentForm((p) => ({ ...p, date: val }))}
+                      placeholder="Receipt date"
                     />
                   </div>
 
                   {(paymentForm.mode === 'upi' || paymentForm.mode === 'credit_note') && (
                     <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">
-                        {paymentForm.mode === 'upi' ? 'UPI Reference / Transaction ID' : 'Credit Note Reference'}
+                      <label className="block text-xs font-normal text-zinc-400 mb-1">
+                        {paymentForm.mode === 'upi' ? 'UPI reference / transaction ID' : 'Credit note reference'}
                       </label>
                       <input
                         value={paymentForm.reference}
                         onChange={(e) => setPaymentForm((p) => ({ ...p, reference: e.target.value }))}
-                        className="glass-input w-full px-3 py-2 num-tabular text-white"
+                        className="glass-input w-full px-3 py-2 num-tabular text-zinc-200"
                       />
                     </div>
                   )}
@@ -4446,20 +4536,20 @@ export default function LogisticsApp() {
                   {paymentForm.mode === 'cheque' && (
                     <>
                       <div>
-                        <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Cheque Number</label>
+                        <label className="block text-xs font-normal text-zinc-400 mb-1">Cheque number</label>
                         <input
                           value={paymentForm.chequeNumber}
                           onChange={(e) => setPaymentForm((p) => ({ ...p, chequeNumber: e.target.value }))}
-                          className="glass-input w-full px-3 py-2 num-tabular text-white"
+                          className="glass-input w-full px-3 py-2 num-tabular text-zinc-200"
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Bank Name</label>
+                        <label className="block text-xs font-normal text-zinc-400 mb-1">Bank name</label>
                         <input
                           value={paymentForm.bankName}
                           onChange={(e) => setPaymentForm((p) => ({ ...p, bankName: e.target.value }))}
                           placeholder="e.g. HDFC"
-                          className="glass-input w-full px-3 py-2 text-white"
+                          className="glass-input w-full px-3 py-2 text-zinc-200"
                         />
                       </div>
                     </>
@@ -4473,16 +4563,16 @@ export default function LogisticsApp() {
                 <div className="mt-6 flex justify-end gap-2">
                   <button
                     onClick={() => setShowPaymentModal(false)}
-                    className="glass-btn px-4 py-2 text-xs font-normal text-white/70 hover:text-white"
+                    className="glass-btn rounded-lg px-3.5 py-1.5 text-xs font-normal text-zinc-400 hover:text-zinc-200"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => runAction('submit-payment', async () => submitPaymentApproval())}
                     disabled={isActionLoading('submit-payment')}
-                    className="glass-btn-primary px-4 py-2 text-xs font-medium text-white shadow-sm disabled:opacity-50"
+                    className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm disabled:opacity-50 transition"
                   >
-                    {isActionLoading('submit-payment') ? 'Submitting...' : 'Record Payment'}
+                    {isActionLoading('submit-payment') ? 'Submitting...' : 'Record payment'}
                   </button>
                 </div>
               </div>
@@ -4491,21 +4581,21 @@ export default function LogisticsApp() {
 
           {/* Note Modal */}
           {showNoteModal && noteModalInvoice ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in">
-              <div className="w-full max-w-md card rounded-[20px] p-6 shadow-panel backdrop-blur-2xl text-white">
-                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+              <div className="w-full max-w-md rounded-[24px] p-6 border border-white/[0.14] bg-[#0e1014] text-zinc-100 shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-indigo-400/25 bg-indigo-500/15 text-indigo-300">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-zinc-400">
                       <FileText className="h-4 w-4" strokeWidth={1.5} />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-white/92">Add Invoice Note</h3>
-                      <p className="text-[11px] text-white/50 num-tabular font-normal">Invoice #{noteModalInvoice.invoiceNumber}</p>
+                      <h3 className="text-sm font-medium text-zinc-100">Add invoice note</h3>
+                      <p className="text-xs text-zinc-500 num-tabular font-normal">Invoice #{noteModalInvoice.invoiceNumber}</p>
                     </div>
                   </div>
                   <button
                     onClick={() => setShowNoteModal(false)}
-                    className="rounded-lg p-1 text-white/40 hover:bg-white/[0.06] hover:text-white"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
                   >
                     <X className="h-4 w-4" strokeWidth={1.5} />
                   </button>
@@ -4513,21 +4603,21 @@ export default function LogisticsApp() {
 
                 <div className="mt-4 space-y-3 text-xs">
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Author</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Author</label>
                     <input
                       value={noteForm.addedBy}
                       onChange={(e) => setNoteForm((p) => ({ ...p, addedBy: e.target.value }))}
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Note Content</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Note content</label>
                     <textarea
                       rows={4}
                       value={noteForm.content}
                       onChange={(e) => setNoteForm((p) => ({ ...p, content: e.target.value }))}
                       placeholder="Add settlement details, shop manager remarks, or transit notes..."
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                 </div>
@@ -4535,16 +4625,16 @@ export default function LogisticsApp() {
                 <div className="mt-6 flex justify-end gap-2">
                   <button
                     onClick={() => setShowNoteModal(false)}
-                    className="glass-btn px-4 py-2 text-xs font-normal text-white/70 hover:text-white"
+                    className="glass-btn rounded-lg px-3.5 py-1.5 text-xs font-normal text-zinc-400 hover:text-zinc-200"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => runAction('save-note', async () => submitNote())}
                     disabled={isActionLoading('save-note')}
-                    className="glass-btn-primary px-4 py-2 text-xs font-medium text-white shadow-sm disabled:opacity-50"
+                    className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm disabled:opacity-50 transition"
                   >
-                    {isActionLoading('save-note') ? 'Saving...' : 'Save Note'}
+                    {isActionLoading('save-note') ? 'Saving...' : 'Save note'}
                   </button>
                 </div>
               </div>
@@ -4553,18 +4643,18 @@ export default function LogisticsApp() {
 
           {/* Agent Modal */}
           {showAgentModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in">
-              <div className="w-full max-w-md card rounded-[20px] p-6 shadow-panel backdrop-blur-2xl text-white">
-                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+              <div className="w-full max-w-md rounded-[24px] p-6 border border-white/[0.14] bg-[#0e1014] text-zinc-100 shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-indigo-400/25 bg-indigo-500/15 text-indigo-300">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-zinc-400">
                       <UserPlus className="h-4 w-4" strokeWidth={1.5} />
                     </div>
-                    <h3 className="text-sm font-medium text-white/92">Create Driver Account</h3>
+                    <h3 className="text-sm font-medium text-zinc-100">Create driver account</h3>
                   </div>
                   <button
                     onClick={() => setShowAgentModal(false)}
-                    className="rounded-lg p-1 text-white/40 hover:bg-white/[0.06] hover:text-white"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
                   >
                     <X className="h-4 w-4" strokeWidth={1.5} />
                   </button>
@@ -4572,31 +4662,31 @@ export default function LogisticsApp() {
 
                 <div className="mt-4 space-y-3 text-xs">
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Driver Full Name</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Driver full name</label>
                     <input
                       value={agentForm.name}
                       onChange={(e) => setAgentForm((p) => ({ ...p, name: e.target.value }))}
                       placeholder="e.g. Ramesh Kumar"
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Username</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Username</label>
                     <input
                       value={agentForm.username}
                       onChange={(e) => setAgentForm((p) => ({ ...p, username: e.target.value }))}
                       placeholder="e.g. ramesh"
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Password</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Password</label>
                     <input
                       type="password"
                       value={agentForm.password}
                       onChange={(e) => setAgentForm((p) => ({ ...p, password: e.target.value }))}
                       placeholder="Account password"
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                 </div>
@@ -4604,16 +4694,16 @@ export default function LogisticsApp() {
                 <div className="mt-6 flex justify-end gap-2">
                   <button
                     onClick={() => setShowAgentModal(false)}
-                    className="glass-btn px-4 py-2 text-xs font-normal text-white/70 hover:text-white"
+                    className="glass-btn rounded-lg px-3.5 py-1.5 text-xs font-normal text-zinc-400 hover:text-zinc-200"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={() => runAction('create-agent', async () => addDeliveryAgent())}
                     disabled={isActionLoading('create-agent')}
-                    className="glass-btn-primary px-4 py-2 text-xs font-medium text-white shadow-sm disabled:opacity-50"
+                    className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm disabled:opacity-50 transition"
                   >
-                    {isActionLoading('create-agent') ? 'Creating...' : 'Create Driver'}
+                    {isActionLoading('create-agent') ? 'Creating...' : 'Create driver'}
                   </button>
                 </div>
               </div>
@@ -4622,18 +4712,18 @@ export default function LogisticsApp() {
 
           {/* Agent Credentials Modal */}
           {showAgentCredentialsModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in">
-              <div className="w-full max-w-md card rounded-[20px] p-6 shadow-panel backdrop-blur-2xl text-white">
-                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+              <div className="w-full max-w-md rounded-[24px] p-6 border border-white/[0.14] bg-[#0e1014] text-zinc-100 shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
+                <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-amber-400/25 bg-amber-400/12 text-amber-300">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-white/[0.04] text-zinc-400">
                       <Key className="h-4 w-4" strokeWidth={1.5} />
                     </div>
-                    <h3 className="text-sm font-medium text-white/92">Update Driver Password</h3>
+                    <h3 className="text-sm font-medium text-zinc-100">Update driver password</h3>
                   </div>
                   <button
                     onClick={() => setShowAgentCredentialsModal(false)}
-                    className="rounded-lg p-1 text-white/40 hover:bg-white/[0.06] hover:text-white"
+                    className="rounded-md p-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
                   >
                     <X className="h-4 w-4" strokeWidth={1.5} />
                   </button>
@@ -4641,29 +4731,29 @@ export default function LogisticsApp() {
 
                 <div className="mt-4 space-y-3 text-xs">
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Driver</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Driver</label>
                     <input
                       value={agentCredentialsForm.name}
                       disabled
-                      className="glass-input w-full px-3 py-2 text-sm text-white/50 font-normal"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-500 font-normal"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">Username</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">Username</label>
                     <input
                       value={agentCredentialsForm.username}
                       disabled
-                      className="glass-input w-full px-3 py-2 text-sm text-white/50 num-tabular font-normal"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-500 num-tabular font-normal"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-white/50 mb-1">New Password</label>
+                    <label className="block text-xs font-normal text-zinc-400 mb-1">New password</label>
                     <input
                       type="password"
                       value={agentCredentialsForm.password}
                       onChange={(e) => setAgentCredentialsForm((p) => ({ ...p, password: e.target.value }))}
                       placeholder="Enter minimum 4 characters"
-                      className="glass-input w-full px-3 py-2 text-sm"
+                      className="glass-input w-full px-3 py-2 text-xs text-zinc-200"
                     />
                   </div>
                 </div>
@@ -4671,7 +4761,7 @@ export default function LogisticsApp() {
                 <div className="mt-6 flex justify-end gap-2">
                   <button
                     onClick={() => setShowAgentCredentialsModal(false)}
-                    className="glass-btn px-4 py-2 text-xs font-normal text-white/70 hover:text-white"
+                    className="glass-btn rounded-lg px-3.5 py-1.5 text-xs font-normal text-zinc-400 hover:text-zinc-200"
                   >
                     Cancel
                   </button>
@@ -4686,14 +4776,9 @@ export default function LogisticsApp() {
               </div>
             </div>
           )}
+            </motion.div>
+          </AnimatePresence>
         </main>
-      </div>
-
-      <ThemeSettingsPopover
-        isOpen={themeOpen}
-        onClose={() => setThemeOpen(false)}
-        anchorEl={themeAnchorEl}
-      />
     </div>
   );
 }
@@ -4745,6 +4830,29 @@ function InvoiceTable({
   onArchive: (invoice: InvoiceRow) => void;
   onDeliveryStatusAction: (invoice: InvoiceRow) => void;
 }) {
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('sgb-density');
+        if (saved === 'compact' || saved === 'comfortable') return saved;
+      } catch {}
+    }
+    return 'comfortable';
+  });
+
+  const handleDensityChange = (newDensity: 'comfortable' | 'compact') => {
+    setDensity(newDensity);
+    try {
+      localStorage.setItem('sgb-density', newDensity);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-density', density);
+    }
+  }, [density]);
+
   const sorting = useMemo<SortingState>(
     () => [{ id: sortBy, desc: sortDirection === 'desc' }],
     [sortBy, sortDirection],
@@ -4756,13 +4864,17 @@ function InvoiceTable({
         accessorKey: 'invoiceNumber',
         header: 'Invoice #',
         meta: { filter: 'invoiceNumber' },
-        cell: (info) => <span className="num-tabular font-medium text-white/95">{String(info.getValue())}</span>,
+        cell: (info) => (
+          <span className="num-tabular font-medium text-[0.90625rem] text-[var(--text-1)]">
+            {String(info.getValue())}
+          </span>
+        ),
       },
       {
         accessorKey: 'cmpCode',
         header: 'CmpCode',
         cell: (info) => (
-          <span className="num-tabular text-xs font-normal text-white/80">
+          <span className="num-tabular text-[0.875rem] font-normal text-[var(--table-body-sec-color)]">
             {String(info.row.original.cmpCode || info.row.original.firm || '-')}
           </span>
         ),
@@ -4772,31 +4884,57 @@ function InvoiceTable({
         header: 'Route',
         meta: { filter: 'route' },
         enableSorting: false,
-        cell: (info) => <span className="text-white/60 font-normal">{String(info.row.original.route || '-')}</span>,
+        cell: (info) => (
+          <span className="text-[0.875rem] font-normal text-[var(--table-body-sec-color)] truncate block">
+            {String(info.row.original.route || '-')}
+          </span>
+        ),
       },
       {
         accessorKey: 'date',
         header: 'Date',
         meta: { filter: 'date' },
-        cell: (info) => <span className="num-tabular text-white/60 font-normal">{String(info.getValue())}</span>,
+        cell: (info) => (
+          <span className="num-tabular text-[0.875rem] font-normal text-[var(--table-body-sec-color)]">
+            {String(info.getValue())}
+          </span>
+        ),
       },
       {
         accessorKey: 'shopName',
         header: 'Shop Name',
         meta: { filter: 'shopName' },
-        cell: (info) => <span className="font-normal text-white/90">{String(info.getValue())}</span>,
+        cell: (info) => {
+          const name = String(info.getValue() || '-');
+          return (
+            <span
+              title={name}
+              className="block font-medium text-[0.9375rem] text-[var(--text-1)] truncate max-w-full"
+            >
+              {name}
+            </span>
+          );
+        },
       },
       {
         accessorKey: 'totalAmount',
         header: 'Total Amount',
         meta: { filter: 'amount' },
-        cell: (info) => <span className="font-medium num-tabular text-white/95">{formatMoney(Number(info.getValue() || 0))}</span>,
+        cell: (info) => (
+          <div className="text-right font-medium num-tabular text-[0.9375rem] text-[var(--text-1)]">
+            {formatMoney(Number(info.getValue() || 0))}
+          </div>
+        ),
       },
       {
         accessorKey: 'deliveryStatus',
         header: 'Delivery',
         meta: { filter: 'deliveryStatus' },
-        cell: (info) => <Badge className={statusBadgeClass(String(info.getValue()))}>{String(info.getValue())}</Badge>,
+        cell: (info) => (
+          <div className="flex items-center justify-start text-left">
+            <StatusChip status={info.getValue()} type="delivery" />
+          </div>
+        ),
       },
       {
         accessorKey: 'paymentStatus',
@@ -4804,7 +4942,11 @@ function InvoiceTable({
         meta: { filter: 'paymentStatus' },
         cell: (info) => {
           const metrics = getInvoicePaymentMetrics(info.row.original);
-          return <Badge className={statusBadgeClass(metrics.status)}>{metrics.status}</Badge>;
+          return (
+            <div className="flex items-center justify-start text-left">
+              <StatusChip status={metrics.status} type="payment" />
+            </div>
+          );
         },
       },
     ],
@@ -4932,137 +5074,174 @@ function InvoiceTable({
   return (
     <div className="space-y-4">
       {/* Table Information Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-white/50">
-        <span className="font-normal text-white/80 num-tabular">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-zinc-400">
+        <span className="font-normal text-zinc-300 num-tabular">
           Showing {rows.length} records · Page {page} of {pages} ({total} total invoices)
         </span>
-        <span className="text-[11px] italic text-white/40 font-normal">
-          Click any invoice row to inspect delivery, notes & transaction ledger
+        <span className="text-xs text-zinc-500 font-normal">
+          Select an invoice row to inspect delivery details, notes, and payments.
         </span>
       </div>
 
       {/* Active Filter Chips */}
       <ActiveFilterChips chips={activeInvoiceChips} onClearAll={handleClearAllInvoiceFilters} />
 
-      <div className="card rounded-[20px] overflow-hidden">
-        <table className="min-w-full text-xs">
-          <thead className="bg-white/[0.06] backdrop-blur-md text-white/50 sticky top-0 z-10 border-b border-white/[0.06]">
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  const filterKey = (header.column.columnDef.meta as { filter?: InvoiceFilterKey } | undefined)?.filter;
-                  return (
-                    <th key={header.id} className="px-4 py-3 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">
-                      {header.isPlaceholder ? null : (
-                        <ColumnFilterHeader
-                          columnId={String(header.column.id)}
-                          label={String(header.column.columnDef.header)}
-                          filterType={
-                            filterKey === 'invoiceNumber' || filterKey === 'shopName'
-                              ? 'text'
-                              : filterKey === 'route' || filterKey === 'deliveryStatus' || filterKey === 'paymentStatus'
-                              ? 'enum'
-                              : filterKey === 'date'
-                              ? 'date'
-                              : filterKey === 'amount'
-                              ? 'amount'
-                              : undefined
-                          }
-                          enumOptions={
-                            filterKey === 'route'
-                              ? routeOptions
-                              : filterKey === 'deliveryStatus'
-                              ? ['delivered', 'pending']
-                              : filterKey === 'paymentStatus'
-                              ? ['paid', 'partial', 'unpaid', 'payable']
-                              : undefined
-                          }
-                          filterValue={
-                            filterKey === 'invoiceNumber'
-                              ? filters.invoiceNumber
-                              : filterKey === 'shopName'
-                              ? filters.shopName
-                              : filterKey === 'route'
-                              ? filters.route
-                              : filterKey === 'date'
-                              ? { from: filters.dateFrom, to: filters.dateTo }
-                              : filterKey === 'amount'
-                              ? { min: filters.amountMin, max: filters.amountMax }
-                              : filterKey === 'deliveryStatus'
-                              ? (filters.deliveryStatus ? [filters.deliveryStatus] : [])
-                              : filterKey === 'paymentStatus'
-                              ? (filters.paymentStatus ? [filters.paymentStatus] : [])
-                              : undefined
-                          }
-                          isFiltered={(() => {
-                            if (!filterKey) return false;
-                            if (filterKey === 'invoiceNumber') return Boolean(filters.invoiceNumber);
-                            if (filterKey === 'shopName') return Boolean(filters.shopName);
-                            if (filterKey === 'route') return filters.route.length > 0;
-                            if (filterKey === 'date') return Boolean(filters.dateFrom || filters.dateTo);
-                            if (filterKey === 'amount') return Boolean(filters.amountMin || filters.amountMax);
-                            if (filterKey === 'deliveryStatus') return Boolean(filters.deliveryStatus);
-                            if (filterKey === 'paymentStatus') return Boolean(filters.paymentStatus);
-                            return false;
-                          })()}
-                          onApplyFilter={(val) => {
-                            if (filterKey === 'invoiceNumber') setFilters((p) => ({ ...p, invoiceNumber: String(val || '') }));
-                            else if (filterKey === 'shopName') setFilters((p) => ({ ...p, shopName: String(val || '') }));
-                            else if (filterKey === 'route') setFilters((p) => ({ ...p, route: Array.isArray(val) ? val : [] }));
-                            else if (filterKey === 'date') setFilters((p) => ({ ...p, dateFrom: val?.from || '', dateTo: val?.to || '' }));
-                            else if (filterKey === 'amount') setFilters((p) => ({ ...p, amountMin: val?.min || '', amountMax: val?.max || '' }));
-                            else if (filterKey === 'deliveryStatus') setFilters((p) => ({ ...p, deliveryStatus: Array.isArray(val) && val[0] ? val[0] : '' }));
-                            else if (filterKey === 'paymentStatus') setFilters((p) => ({ ...p, paymentStatus: Array.isArray(val) && val[0] ? val[0] : '' }));
-                          }}
-                          onClearFilter={() => {
-                            if (filterKey === 'invoiceNumber') setFilters((p) => ({ ...p, invoiceNumber: '' }));
-                            else if (filterKey === 'shopName') setFilters((p) => ({ ...p, shopName: '' }));
-                            else if (filterKey === 'route') setFilters((p) => ({ ...p, route: [] }));
-                            else if (filterKey === 'date') setFilters((p) => ({ ...p, dateFrom: '', dateTo: '' }));
-                            else if (filterKey === 'amount') setFilters((p) => ({ ...p, amountMin: '', amountMax: '' }));
-                            else if (filterKey === 'deliveryStatus') setFilters((p) => ({ ...p, deliveryStatus: '' }));
-                            else if (filterKey === 'paymentStatus') setFilters((p) => ({ ...p, paymentStatus: '' }));
-                          }}
-                          sortState={header.column.getIsSorted()}
-                          onSort={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
-                        />
-                      )}
-                    </th>
-                  );
-                })}
-              </tr>
-            ))}
-          </thead>
-          <tbody className="divide-y divide-white/[0.06]">
-            {loading ? (
-              Array.from({ length: 8 }).map((_, i) => (
-                <tr key={i} className="border-b border-white/[0.06]">
-                  <td colSpan={8} className="px-4 py-3.5">
-                    <div className="skeleton h-5 w-full bg-white/[0.04]" />
+      <div
+        className="glass-table-container rounded-[24px] overflow-hidden border border-white/[0.12] bg-[rgba(10,20,14,0.45)] backdrop-blur-[24px] shadow-glass"
+        data-density={density}
+      >
+        <div className="overflow-x-auto w-full">
+          <table className="sgb-table table-fixed min-w-[1040px] w-full">
+            <colgroup>
+              <col style={{ width: '160px', minWidth: '160px' }} />
+              <col className="hidden sm:table-column" style={{ width: '100px', minWidth: '100px' }} />
+              <col style={{ width: '160px', minWidth: '160px' }} />
+              <col className="hidden sm:table-column" style={{ width: '120px', minWidth: '120px' }} />
+              <col style={{ width: 'auto', minWidth: '260px' }} />
+              <col style={{ width: '140px', minWidth: '140px' }} />
+              <col style={{ width: '150px', minWidth: '150px' }} />
+              <col style={{ width: '150px', minWidth: '150px' }} />
+            </colgroup>
+            <thead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header, colIndex) => {
+                    const filterKey = (header.column.columnDef.meta as { filter?: InvoiceFilterKey } | undefined)?.filter;
+                    const isFirst = colIndex === 0;
+                    const isCmpCode = header.column.id === 'cmpCode';
+                    const isDate = header.column.id === 'date';
+                    const isAmount = header.column.id === 'totalAmount';
+
+                    return (
+                      <th
+                        key={header.id}
+                        className={`${isFirst ? 'sticky-col' : ''} ${
+                          isCmpCode || isDate ? 'hidden sm:table-cell' : ''
+                        }`}
+                      >
+                        {header.isPlaceholder ? null : (
+                          <ColumnFilterHeader
+                            columnId={String(header.column.id)}
+                            label={String(header.column.columnDef.header)}
+                            align={isAmount ? 'right' : 'left'}
+                            filterType={
+                              filterKey === 'invoiceNumber' || filterKey === 'shopName'
+                                ? 'text'
+                                : filterKey === 'route' || filterKey === 'deliveryStatus' || filterKey === 'paymentStatus'
+                                ? 'enum'
+                                : filterKey === 'date'
+                                ? 'date'
+                                : filterKey === 'amount'
+                                ? 'amount'
+                                : undefined
+                            }
+                            enumOptions={
+                              filterKey === 'route'
+                                ? routeOptions
+                                : filterKey === 'deliveryStatus'
+                                ? ['delivered', 'pending']
+                                : filterKey === 'paymentStatus'
+                                ? ['paid', 'partial', 'unpaid', 'payable']
+                                : undefined
+                            }
+                            filterValue={
+                              filterKey === 'invoiceNumber'
+                                ? filters.invoiceNumber
+                                : filterKey === 'shopName'
+                                ? filters.shopName
+                                : filterKey === 'route'
+                                ? filters.route
+                                : filterKey === 'date'
+                                ? { from: filters.dateFrom, to: filters.dateTo }
+                                : filterKey === 'amount'
+                                ? { min: filters.amountMin, max: filters.amountMax }
+                                : filterKey === 'deliveryStatus'
+                                ? (filters.deliveryStatus ? [filters.deliveryStatus] : [])
+                                : filterKey === 'paymentStatus'
+                                ? (filters.paymentStatus ? [filters.paymentStatus] : [])
+                                : undefined
+                            }
+                            isFiltered={(() => {
+                              if (!filterKey) return false;
+                              if (filterKey === 'invoiceNumber') return Boolean(filters.invoiceNumber);
+                              if (filterKey === 'shopName') return Boolean(filters.shopName);
+                              if (filterKey === 'route') return filters.route.length > 0;
+                              if (filterKey === 'date') return Boolean(filters.dateFrom || filters.dateTo);
+                              if (filterKey === 'amount') return Boolean(filters.amountMin || filters.amountMax);
+                              if (filterKey === 'deliveryStatus') return Boolean(filters.deliveryStatus);
+                              if (filterKey === 'paymentStatus') return Boolean(filters.paymentStatus);
+                              return false;
+                            })()}
+                            onApplyFilter={(val) => {
+                              if (filterKey === 'invoiceNumber') setFilters((p) => ({ ...p, invoiceNumber: String(val || '') }));
+                              else if (filterKey === 'shopName') setFilters((p) => ({ ...p, shopName: String(val || '') }));
+                              else if (filterKey === 'route') setFilters((p) => ({ ...p, route: Array.isArray(val) ? val : [] }));
+                              else if (filterKey === 'date') setFilters((p) => ({ ...p, dateFrom: val?.from || '', dateTo: val?.to || '' }));
+                              else if (filterKey === 'amount') setFilters((p) => ({ ...p, amountMin: val?.min || '', amountMax: val?.max || '' }));
+                              else if (filterKey === 'deliveryStatus') setFilters((p) => ({ ...p, deliveryStatus: Array.isArray(val) && val[0] ? val[0] : '' }));
+                              else if (filterKey === 'paymentStatus') setFilters((p) => ({ ...p, paymentStatus: Array.isArray(val) && val[0] ? val[0] : '' }));
+                            }}
+                            onClearFilter={() => {
+                              if (filterKey === 'invoiceNumber') setFilters((p) => ({ ...p, invoiceNumber: '' }));
+                              else if (filterKey === 'shopName') setFilters((p) => ({ ...p, shopName: '' }));
+                              else if (filterKey === 'route') setFilters((p) => ({ ...p, route: [] }));
+                              else if (filterKey === 'date') setFilters((p) => ({ ...p, dateFrom: '', dateTo: '' }));
+                              else if (filterKey === 'amount') setFilters((p) => ({ ...p, amountMin: '', amountMax: '' }));
+                              else if (filterKey === 'deliveryStatus') setFilters((p) => ({ ...p, deliveryStatus: '' }));
+                              else if (filterKey === 'paymentStatus') setFilters((p) => ({ ...p, paymentStatus: '' }));
+                            }}
+                            sortState={header.column.getIsSorted()}
+                            onSort={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
+                          />
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              ))}
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={i}>
+                    <td colSpan={8}>
+                      <div className="skeleton h-5 w-full bg-white/[0.04]" />
+                    </td>
+                  </tr>
+                ))
+              ) : table.getRowModel().rows.length === 0 ? (
+                <tr>
+                  <td className="py-12 text-center text-[var(--table-body-sec-color)]" colSpan={8}>
+                    No invoices found matching current filter parameters.
                   </td>
                 </tr>
-              ))
-            ) : table.getRowModel().rows.length === 0 ? (
-              <tr>
-                <td className="px-4 py-12 text-center text-white/40" colSpan={8}>
-                  No invoices found matching current filter parameters.
-                </td>
-              </tr>
-            ) : (
-              table.getRowModel().rows.map((row) => (
-                <Fragment key={row.id}>
-                  <tr
-                    className={`cursor-pointer transition ${
-                      expandedInvoice === row.original._id ? 'bg-indigo-500/12' : 'hover:bg-white/[0.04]'
-                    }`}
-                    onClick={() => setExpandedInvoice(expandedInvoice === row.original._id ? null : row.original._id)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-4 py-3 text-white/80">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
-                  </tr>
+              ) : (
+                table.getRowModel().rows.map((row, index) => (
+                  <Fragment key={row.id}>
+                    <tr
+                      className={`group cursor-pointer transition-colors ${
+                        expandedInvoice === row.original._id ? 'is-selected' : ''
+                      } ${index < 12 ? 'fade-in-row' : ''}`}
+                      style={index < 12 ? { animationDelay: `${index * 20}ms` } : undefined}
+                      onClick={() => setExpandedInvoice(expandedInvoice === row.original._id ? null : row.original._id)}
+                    >
+                      {row.getVisibleCells().map((cell, cellIndex) => {
+                        const isFirst = cellIndex === 0;
+                        const isCmpCode = cell.column.id === 'cmpCode';
+                        const isDate = cell.column.id === 'date';
+
+                        return (
+                          <td
+                            key={cell.id}
+                            className={`${isFirst ? 'sticky-col' : ''} ${
+                              isCmpCode || isDate ? 'hidden sm:table-cell' : ''
+                            }`}
+                          >
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        );
+                      })}
+                    </tr>
                   <AnimatePresence initial={false}>
                     {expandedInvoice === row.original._id && (
                       <motion.tr
@@ -5072,7 +5251,7 @@ function InvoiceTable({
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.15 }}
                       >
-                        <td colSpan={8} className="bg-white/[0.03] p-4 border-b border-white/[0.06] backdrop-blur-md">
+                        <td colSpan={8} className="bg-[rgba(14,26,18,0.7)] p-5 border-b border-white/[0.08]">
                           <motion.div
                             initial={{ height: 0 }}
                             animate={{ height: 'auto' }}
@@ -5082,55 +5261,53 @@ function InvoiceTable({
                             {/* 4 Diagnostic Inspection Cards */}
                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                               {/* 1. Delivery Info Card */}
-                              <div className="glass-row p-3.5 shadow-sm rounded-xl">
-                                <div className="flex items-center gap-2 border-b border-white/[0.06] pb-2 text-white/95 font-medium">
-                                  <Truck className="h-3.5 w-3.5 text-sky-400" strokeWidth={1.5} />
-                                  <span>Delivery Details</span>
+                              <div className="rounded-xl border border-white/[0.08] bg-[#18181b] p-3.5">
+                                <div className="flex items-center gap-2 border-b border-white/[0.08] pb-2 text-zinc-200 font-medium text-xs">
+                                  <Truck className="h-3.5 w-3.5 text-zinc-400" strokeWidth={1.5} />
+                                  <span>Delivery details</span>
                                 </div>
-                                <div className="mt-2.5 space-y-1.5 text-[11px]">
+                                <div className="mt-2.5 space-y-1.5 text-xs">
                                   <div className="flex justify-between">
-                                    <span className="text-white/50">Status</span>
-                                    <Badge className={statusBadgeClass(row.original.deliveryStatus)}>
-                                      {row.original.deliveryStatus}
-                                    </Badge>
+                                    <span className="text-zinc-400">Status</span>
+                                    <StatusChip status={row.original.deliveryStatus} type="delivery" />
                                   </div>
                                   <div className="flex justify-between">
-                                    <span className="text-white/50">Driver</span>
-                                    <span className="font-normal text-white/95">{row.original.deliveryPerson || 'Unassigned'}</span>
+                                    <span className="text-zinc-400">Driver</span>
+                                    <span className="font-normal text-zinc-200">{row.original.deliveryPerson || 'Unassigned'}</span>
                                   </div>
                                   <div className="flex justify-between">
-                                    <span className="text-white/50">Delivered At</span>
-                                    <span className="num-tabular font-normal text-white/70">{formatDateTime(row.original.deliveredAt || row.original.deliveredDate)}</span>
+                                    <span className="text-zinc-400">Delivered at</span>
+                                    <span className="num-tabular font-normal text-zinc-400">{formatDateTime(row.original.deliveredAt || row.original.deliveredDate)}</span>
                                   </div>
                                 </div>
                               </div>
 
                               {/* 2. Financial Balance Summary Card */}
-                              <div className="glass-row p-3.5 shadow-sm rounded-xl">
+                              <div className="rounded-xl border border-white/[0.08] bg-[#18181b] p-3.5">
                                 {(() => {
                                   const metrics = getInvoicePaymentMetrics(row.original);
                                   return (
                                     <>
-                                      <div className="flex items-center gap-2 border-b border-white/[0.06] pb-2 text-white/95 font-medium">
-                                        <Wallet className="h-3.5 w-3.5 text-emerald-400" strokeWidth={1.5} />
-                                        <span>Invoice Balances</span>
+                                      <div className="flex items-center gap-2 border-b border-white/[0.08] pb-2 text-zinc-200 font-medium text-xs">
+                                        <Wallet className="h-3.5 w-3.5 text-zinc-400" strokeWidth={1.5} />
+                                        <span>Invoice balances</span>
                                       </div>
-                                      <div className="mt-2.5 space-y-1.5 text-[11px]">
+                                      <div className="mt-2.5 space-y-1.5 text-xs">
                                         <div className="flex justify-between">
-                                          <span className="text-white/50">Total Billed</span>
-                                          <span className="font-medium text-white/95 num-tabular">{formatMoney(metrics.total)}</span>
+                                          <span className="text-zinc-400">Total billed</span>
+                                          <span className="font-medium text-zinc-200 num-tabular">{formatMoney(metrics.total)}</span>
                                         </div>
                                         <div className="flex justify-between">
-                                          <span className="text-white/50">Settled (Paid)</span>
+                                          <span className="text-zinc-400">Settled (Paid)</span>
                                           <span className="font-medium text-emerald-400 num-tabular">{formatMoney(metrics.paid)}</span>
                                         </div>
                                         <div className="flex justify-between">
-                                          <span className="text-white/50">Deductions</span>
+                                          <span className="text-zinc-400">Deductions</span>
                                           <span className="font-medium text-amber-400 num-tabular">{formatMoney(metrics.deducted)}</span>
                                         </div>
-                                        <div className="flex justify-between border-t border-white/[0.06] pt-1 font-medium">
-                                          <span className="text-white/80">Remaining</span>
-                                          <span className={`num-tabular ${metrics.remaining > 0.01 ? 'text-rose-400' : 'text-white/95'}`}>
+                                        <div className="flex justify-between border-t border-white/[0.08] pt-1 font-medium">
+                                          <span className="text-zinc-300">Remaining</span>
+                                          <span className={`num-tabular ${metrics.remaining > 0.01 ? 'text-rose-400' : 'text-zinc-200'}`}>
                                             {formatMoney(metrics.remaining)}
                                           </span>
                                         </div>
@@ -5141,39 +5318,39 @@ function InvoiceTable({
                               </div>
 
                               {/* 3. Deductions Breakdown Card */}
-                              <div className="glass-row p-3.5 shadow-sm rounded-xl">
-                                <div className="flex items-center gap-2 border-b border-white/[0.06] pb-2 text-white/95 font-medium">
-                                  <Coins className="h-3.5 w-3.5 text-amber-400" strokeWidth={1.5} />
-                                  <span>Deductions Log</span>
+                              <div className="rounded-xl border border-white/[0.08] bg-[#18181b] p-3.5">
+                                <div className="flex items-center gap-2 border-b border-white/[0.08] pb-2 text-zinc-200 font-medium text-xs">
+                                  <Coins className="h-3.5 w-3.5 text-zinc-400" strokeWidth={1.5} />
+                                  <span>Deductions log</span>
                                 </div>
-                                <div className="mt-2.5 max-h-24 overflow-y-auto space-y-1 text-[11px]">
+                                <div className="mt-2.5 max-h-24 overflow-y-auto space-y-1 text-xs">
                                   {(row.original.deductions || []).map((ded, idx) => (
-                                    <div key={idx} className="flex justify-between items-center rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1 text-white/80">
+                                    <div key={idx} className="flex justify-between items-center rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-zinc-300">
                                       <span>{ded.typeLabel || ded.type}</span>
-                                      <span className="font-medium num-tabular text-white">{formatMoney(Number(ded.amount || 0))}</span>
+                                      <span className="font-medium num-tabular text-zinc-100">{formatMoney(Number(ded.amount || 0))}</span>
                                     </div>
                                   ))}
                                   {!(row.original.deductions || []).length && (
-                                    <p className="text-white/40 py-2">No adjustments or deductions applied.</p>
+                                    <p className="text-zinc-500 py-2">No adjustments or deductions applied.</p>
                                   )}
                                 </div>
                               </div>
 
                               {/* 4. Notes & Remarks Card */}
-                              <div className="glass-row p-3.5 shadow-sm rounded-xl">
-                                <div className="flex items-center gap-2 border-b border-white/[0.06] pb-2 text-white/95 font-medium">
-                                  <FileText className="h-3.5 w-3.5 text-indigo-400" strokeWidth={1.5} />
-                                  <span>Admin Notes</span>
+                              <div className="rounded-xl border border-white/[0.08] bg-[#18181b] p-3.5">
+                                <div className="flex items-center gap-2 border-b border-white/[0.08] pb-2 text-zinc-200 font-medium text-xs">
+                                  <FileText className="h-3.5 w-3.5 text-zinc-400" strokeWidth={1.5} />
+                                  <span>Admin notes</span>
                                 </div>
-                                <div className="mt-2.5 max-h-24 overflow-y-auto space-y-1.5 text-[11px]">
+                                <div className="mt-2.5 max-h-24 overflow-y-auto space-y-1.5 text-xs">
                                   {(row.original.notes || []).map((note, idx) => (
-                                    <div key={idx} className="rounded-lg bg-white/[0.03] p-1.5 border border-white/[0.06]">
-                                      <p className="text-white/90 font-normal">{note.text}</p>
-                                      <p className="text-[10px] text-white/40 num-tabular mt-0.5">{note.addedBy || 'Admin'} · {formatDateTime(note.timestamp || note.createdAt)}</p>
+                                    <div key={idx} className="rounded-md bg-white/[0.04] p-1.5 border border-white/[0.08]">
+                                      <p className="text-zinc-200 font-normal">{note.text}</p>
+                                      <p className="text-[10px] text-zinc-500 num-tabular mt-0.5">{note.addedBy || 'Admin'} · {formatDateTime(note.timestamp || note.createdAt)}</p>
                                     </div>
                                   ))}
                                   {!(row.original.notes || []).length && (
-                                    <p className="text-white/40 py-2">No notes recorded for this invoice.</p>
+                                    <p className="text-zinc-500 py-2">No notes recorded for this invoice.</p>
                                   )}
                                 </div>
                               </div>
@@ -5181,39 +5358,39 @@ function InvoiceTable({
 
                             {/* Payment History Ledger Table inside expander */}
                             {(row.original.paymentHistory || []).length > 0 && (
-                              <div className="glass-row p-3.5 shadow-sm rounded-xl">
-                                <p className="text-xs font-medium text-white/95 mb-2">Recorded Payment Receipts</p>
+                              <div className="rounded-xl border border-white/[0.08] bg-[#18181b] p-3.5">
+                                <p className="text-xs font-medium text-zinc-200 mb-2">Recorded payment receipts</p>
                                 <div className="table-wrapper">
                                   <table className="min-w-full text-xs">
-                                    <thead className="bg-transparent text-white/50 font-medium border-b border-white/[0.06]">
+                                    <thead className="bg-transparent text-zinc-400 font-medium border-b border-white/[0.08]">
                                       <tr>
-                                        <th className="px-3 py-1.5 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Mode</th>
-                                        <th className="px-3 py-1.5 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Amount</th>
-                                        <th className="px-3 py-1.5 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Date</th>
-                                        <th className="px-3 py-1.5 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Collector</th>
-                                        <th className="px-3 py-1.5 text-left font-medium text-[11px] uppercase tracking-[0.08em] text-white/45">Reference / Cheque</th>
+                                        <th className="px-3 py-1.5 text-left font-medium text-xs text-zinc-400">Mode</th>
+                                        <th className="px-3 py-1.5 text-left font-medium text-xs text-zinc-400">Amount</th>
+                                        <th className="px-3 py-1.5 text-left font-medium text-xs text-zinc-400">Date</th>
+                                        <th className="px-3 py-1.5 text-left font-medium text-xs text-zinc-400">Collector</th>
+                                        <th className="px-3 py-1.5 text-left font-medium text-xs text-zinc-400">Reference / cheque</th>
                                       </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-white/[0.06]">
+                                    <tbody className="divide-y divide-white/[0.08]">
                                       {row.original.paymentHistory!.map((p, i) => (
-                                        <tr key={i} className="hover:bg-white/[0.04]">
-                                          <td className="px-3 py-1.5 uppercase font-medium text-white/80">{p.mode}</td>
+                                        <tr key={i} className="hover:bg-white/[0.03]">
+                                          <td className="px-3 py-1.5 capitalize font-normal text-zinc-300">{p.mode}</td>
                                           <td className="px-3 py-1.5 font-medium num-tabular text-emerald-400">{formatMoney(Number(p.amount || 0))}</td>
-                                          <td className="px-3 py-1.5 num-tabular text-white/50">{formatDateTime(p.date)}</td>
-                                          <td className="px-3 py-1.5 text-white/70 font-normal">{p.collectedBy || '-'}</td>
+                                          <td className="px-3 py-1.5 num-tabular text-zinc-400">{formatDateTime(p.date)}</td>
+                                          <td className="px-3 py-1.5 text-zinc-300 font-normal">{p.collectedBy || '-'}</td>
                                           <td className="px-3 py-1.5">
                                             {p.proofImageUrl ? (
                                               <a
                                                 href={p.proofImageUrl}
                                                 target="_blank"
                                                 rel="noreferrer"
-                                                className="inline-flex items-center gap-1 rounded-full bg-sky-400/12 border border-sky-400/25 px-2 py-0.5 text-[10px] font-medium text-sky-300 hover:bg-sky-400/20"
+                                                className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] border border-white/[0.08] px-2 py-0.5 text-xs font-normal text-zinc-300 hover:text-white hover:bg-white/[0.08]"
                                               >
-                                                <span>Proof Image</span>
+                                                <span>Proof image</span>
                                                 <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
                                               </a>
                                             ) : (
-                                              <span className="text-white/60 num-tabular">{p.reference || p.chequeNumber || '-'}</span>
+                                              <span className="text-zinc-400 num-tabular">{p.reference || p.chequeNumber || '-'}</span>
                                             )}
                                           </td>
                                         </tr>
@@ -5231,40 +5408,40 @@ function InvoiceTable({
                                   e.stopPropagation();
                                   onDeliveryStatusAction(row.original);
                                 }}
-                                className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                                   row.original.deliveryStatus === 'delivered'
-                                    ? 'glass-btn text-white/80'
+                                    ? 'glass-btn text-zinc-300'
                                     : 'glass-btn-primary'
                                 }`}
                               >
-                                {row.original.deliveryStatus === 'delivered' ? 'Mark Undelivered' : 'Mark Delivered'}
+                                {row.original.deliveryStatus === 'delivered' ? 'Mark undelivered' : 'Mark delivered'}
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onAddPayment(row.original);
                                 }}
-                                className="glass-btn-primary rounded-xl px-3 py-1.5 text-xs font-medium text-white shadow-sm"
+                                className="glass-btn-primary rounded-lg px-3 py-1.5 text-xs font-medium text-white shadow-sm"
                               >
-                                Add Payment
+                                Add payment
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onAddNote(row.original);
                                 }}
-                                className="glass-btn rounded-xl px-3 py-1.5 text-xs font-medium text-white/80"
+                                className="glass-btn rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-300"
                               >
-                                Add Note
+                                Add note
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onArchive(row.original);
                                 }}
-                                className="glass-btn rounded-xl px-3 py-1.5 text-xs font-medium text-white/50 hover:bg-rose-500/15 hover:text-rose-300"
+                                className="glass-btn rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-rose-500/10 hover:text-rose-400"
                               >
-                                Archive Invoice
+                                Archive invoice
                               </button>
                             </div>
                           </motion.div>
@@ -5277,57 +5454,99 @@ function InvoiceTable({
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
-      {/* Pagination Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-1 py-2">
-        <span className="text-xs text-white/50 num-tabular">
-          Page <strong className="font-medium text-white/90">{page}</strong> of <strong className="font-medium text-white/90">{pages}</strong>
-        </span>
+      {/* Pagination Controls (Section 2 & 5) */}
+      <div className="flex flex-wrap items-center justify-between gap-4 px-1 py-3 text-[13px] border-t border-white/[0.06]">
+        {/* Left: Showing records */}
+        <div className="flex items-center gap-3">
+          <span className="text-[13px] text-[var(--text-2)] num-tabular font-normal">
+            Showing {rows.length} records of {total.toLocaleString()}
+          </span>
+          <span className="text-[13px] text-[var(--text-3)] hidden md:inline">
+            · Page {page} of {pages}
+          </span>
+        </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            aria-label="Previous page"
-            disabled={page <= 1 || loading}
-            onClick={onPrev}
-            className="glass-btn flex h-8 w-8 items-center justify-center rounded-xl text-white/70 disabled:opacity-30"
-          >
-            <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
-          </button>
+        {/* Right side: Page buttons, Density segmented control, Keyboard hint */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Page Buttons */}
+          <div className="flex items-center gap-1.5">
+            <button
+              aria-label="Previous page"
+              disabled={page <= 1 || loading}
+              onClick={onPrev}
+              className="glass-btn flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30"
+            >
+              <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
+            </button>
 
-          {paginationItems.map((item, idx) => {
-            if (item === 'ellipsis-left' || item === 'ellipsis-right') {
+            {paginationItems.map((item, idx) => {
+              if (item === 'ellipsis-left' || item === 'ellipsis-right') {
+                return (
+                  <span key={`${item}-${idx}`} className="px-1 text-zinc-600 num-tabular text-xs">
+                    ...
+                  </span>
+                );
+              }
+
               return (
-                <span key={`${item}-${idx}`} className="px-1 text-white/30 num-tabular">
-                  ...
-                </span>
+                <button
+                  key={item}
+                  disabled={loading}
+                  onClick={() => onPageJump(item)}
+                  className={`flex h-8 min-w-[32px] items-center justify-center rounded-lg px-2 text-xs font-medium num-tabular transition disabled:opacity-30 ${
+                    item === page
+                      ? 'glass-pill-active'
+                      : 'glass-btn text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {item}
+                </button>
               );
-            }
+            })}
 
-            return (
-              <button
-                key={item}
-                disabled={loading}
-                onClick={() => onPageJump(item)}
-                className={`flex h-8 min-w-[32px] items-center justify-center rounded-xl px-2 text-xs font-medium num-tabular transition disabled:opacity-30 ${
-                  item === page
-                    ? 'glass-pill-active'
-                    : 'glass-btn text-white/70'
-                }`}
-              >
-                {item}
-              </button>
-            );
-          })}
+            <button
+              aria-label="Next page"
+              disabled={page >= pages || loading}
+              onClick={onNext}
+              className="glass-btn flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-200 disabled:opacity-30"
+            >
+              <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
+            </button>
+          </div>
 
-          <button
-            aria-label="Next page"
-            disabled={page >= pages || loading}
-            onClick={onNext}
-            className="glass-btn flex h-8 w-8 items-center justify-center rounded-xl text-white/70 disabled:opacity-30"
-          >
-            <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
-          </button>
+          {/* Density Option Segmented Control (Section 5) */}
+          <div className="inline-flex items-center p-0.5 rounded-full bg-white/[0.05] border border-white/[0.08] text-xs">
+            <button
+              type="button"
+              onClick={() => handleDensityChange('comfortable')}
+              className={`px-3 py-1 rounded-full text-[12px] font-medium transition ${
+                density === 'comfortable'
+                  ? 'bg-[var(--accent-solid)] text-[var(--on-accent)] shadow-sm'
+                  : 'text-[var(--text-3)] hover:text-[var(--text-1)]'
+              }`}
+            >
+              Comfortable
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDensityChange('compact')}
+              className={`px-3 py-1 rounded-full text-[12px] font-medium transition ${
+                density === 'compact'
+                  ? 'bg-[var(--accent-solid)] text-[var(--on-accent)] shadow-sm'
+                  : 'text-[var(--text-3)] hover:text-[var(--text-1)]'
+              }`}
+            >
+              Compact
+            </button>
+          </div>
+
+          {/* Keyboard Hint (Section 2) */}
+          <span className="text-[13px] text-[var(--text-3)] hidden lg:inline select-none">
+            Use &larr; &rarr; to paginate
+          </span>
         </div>
       </div>
     </div>

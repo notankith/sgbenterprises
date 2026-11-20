@@ -25,13 +25,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var s=localStorage.getItem('sgb-theme');if(s){var t=JSON.parse(s);var m=t.mode||'dark';var r=m==='system'?(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):m;document.documentElement.setAttribute('data-theme',r);if(t.accent){document.documentElement.style.setProperty('--accent-solid',t.accent);}}}catch(e){}})();`,
+            __html: `(function(){try{document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.setProperty('--accent-solid','#b9cf9f');localStorage.removeItem('sgb-theme');}catch(e){}})();`,
           }}
         />
       </head>
       <body className={`${inter.variable} font-sans`} suppressHydrationWarning>
         <ThemeProvider>
-          <div className="glass-background-layer" aria-hidden="true" />
+          <div className="glass-background-layer" aria-hidden="true">
+            <div className="ambient-light-top-left" />
+            <div className="ambient-light-bottom-right" />
+            <div className="bg-grain-overlay" />
+          </div>
           {children}
         </ThemeProvider>
       </body>

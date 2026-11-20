@@ -10,6 +10,7 @@ import React, {
   ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { GlassPopover } from '@/components/glass-popover';
 import {
   Check,
   Moon,
@@ -32,17 +33,17 @@ export interface ThemeConfig {
 }
 
 export const PRESET_ACCENTS = [
+  { name: 'Soft Sage', value: '#b9cf9f' },
+  { name: 'Forest', value: '#2d6a4f' },
   { name: 'Indigo', value: '#6366f1' },
-  { name: 'Violet', value: '#a855f7' },
-  { name: 'Cyan', value: '#22d3ee' },
   { name: 'Emerald', value: '#10b981' },
-  { name: 'Rose', value: '#f43f5e' },
-  { name: 'Amber', value: '#f59e0b' },
+  { name: 'Warm Amber', value: '#d9824a' },
+  { name: 'Cyan', value: '#22d3ee' },
 ] as const;
 
 export const DEFAULT_THEME: ThemeConfig = {
   mode: 'dark',
-  accent: '#6366f1',
+  accent: '#b9cf9f',
   background: 'aurora',
   intensity: 50,
 };
@@ -101,6 +102,8 @@ export function applyThemeTokens(config: ThemeConfig) {
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
 
   root.style.setProperty('--accent-solid', `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`);
+  const isLightAccent = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000 > 140;
+  root.style.setProperty('--on-accent', isLightAccent ? '#060708' : '#ffffff');
   root.style.setProperty('--accent', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.22)`);
   root.style.setProperty('--accent-soft', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`);
   root.style.setProperty('--accent-border', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.40)`);
@@ -113,15 +116,15 @@ export function applyThemeTokens(config: ThemeConfig) {
   root.style.setProperty('--blob-opacity', String(blobOpacity));
 
   if (resolvedMode === 'dark') {
-    root.style.setProperty('--blob-1', `hsla(${hsl.h}, ${Math.max(65, hsl.s)}%, ${Math.min(60, Math.max(45, hsl.l))}%, 0.45)`);
-    root.style.setProperty('--blob-2', `hsla(${(hsl.h + 40) % 360}, ${Math.max(65, hsl.s)}%, ${Math.min(60, Math.max(45, hsl.l))}%, 0.38)`);
-    root.style.setProperty('--blob-3', `hsla(${(hsl.h + 170) % 360}, ${Math.max(65, hsl.s)}%, ${Math.min(60, Math.max(45, hsl.l))}%, 0.30)`);
-    root.style.setProperty('--blob-4', `hsla(${(hsl.h + 290) % 360}, ${Math.max(65, hsl.s)}%, ${Math.min(60, Math.max(45, hsl.l))}%, 0.20)`);
+    root.style.setProperty('--bg-base', '#060708');
+    root.style.setProperty('--text-1', 'rgba(255, 255, 255, 0.92)');
+    root.style.setProperty('--text-2', 'rgba(255, 255, 255, 0.58)');
+    root.style.setProperty('--text-3', 'rgba(255, 255, 255, 0.36)');
   } else {
-    root.style.setProperty('--blob-1', `hsla(${hsl.h}, ${Math.max(50, hsl.s)}%, 72%, 0.35)`);
-    root.style.setProperty('--blob-2', `hsla(${(hsl.h + 40) % 360}, ${Math.max(50, hsl.s)}%, 75%, 0.28)`);
-    root.style.setProperty('--blob-3', `hsla(${(hsl.h + 170) % 360}, ${Math.max(50, hsl.s)}%, 78%, 0.25)`);
-    root.style.setProperty('--blob-4', `hsla(${(hsl.h + 290) % 360}, ${Math.max(50, hsl.s)}%, 80%, 0.20)`);
+    root.style.setProperty('--bg-base', '#f7f8f4');
+    root.style.setProperty('--text-1', 'rgba(15, 20, 16, 0.92)');
+    root.style.setProperty('--text-2', 'rgba(15, 20, 16, 0.60)');
+    root.style.setProperty('--text-3', 'rgba(15, 20, 16, 0.38)');
   }
 
   // 4. Glass intensity
@@ -158,12 +161,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    let initial = DEFAULT_THEME;
+    const initial = DEFAULT_THEME;
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        initial = { ...DEFAULT_THEME, ...JSON.parse(stored) };
-      }
+      localStorage.removeItem(STORAGE_KEY);
     } catch (e) {}
     setThemeState(initial);
     applyThemeTokens(initial);
@@ -217,65 +217,17 @@ export function ThemeSettingsPopover({
   anchorEl: HTMLElement | null;
 }) {
   const { theme, setTheme, resetTheme } = useTheme();
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 60, left: 20 });
 
-  useEffect(() => {
-    if (!isOpen || !anchorEl) return;
-    const rect = anchorEl.getBoundingClientRect();
-    const popoverWidth = 320;
-    const popoverHeight = 440;
-
-    let left = rect.left;
-    if (typeof window !== 'undefined') {
-      if (left + popoverWidth > window.innerWidth - 16) {
-        left = Math.max(16, window.innerWidth - popoverWidth - 16);
-      }
-    }
-
-    let top = rect.bottom + 8;
-    if (typeof window !== 'undefined') {
-      if (top + popoverHeight > window.innerHeight - 16 && rect.top > popoverHeight) {
-        top = rect.top - popoverHeight - 8;
-      }
-    }
-
-    setPos({ top, left });
-  }, [isOpen, anchorEl]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen || typeof document === 'undefined') return null;
-
-  return createPortal(
-    <>
-      {/* Invisible backdrop layer with slight table dimming */}
-      <div
-        className="fixed inset-0 z-[9998] bg-black/15 transition-opacity"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-
-      <div
-        ref={popoverRef}
-        style={{
-          position: 'fixed',
-          top: `${pos.top}px`,
-          left: `${pos.left}px`,
-          width: '320px',
-          zIndex: 9999,
-        }}
-        className="glass-popover p-4 text-xs shadow-2xl animate-in fade-in zoom-in-95 duration-150"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
+  return (
+    <GlassPopover
+      isOpen={isOpen}
+      onClose={onClose}
+      anchorEl={anchorEl}
+      width={320}
+      id="theme-settings-popover"
+      className="p-4 text-xs select-none"
+    >
+      {/* Header */}
         <div className="flex items-center justify-between border-b border-white/[0.08] pb-3 mb-3.5">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--accent)] border border-[var(--accent-border)] text-white shadow-sm">
@@ -425,14 +377,12 @@ export function ThemeSettingsPopover({
           </button>
           <button
             onClick={onClose}
-            className="glass-btn-primary px-3 py-1 text-xs font-medium text-white shadow-sm"
+            className="px-3 py-1 text-xs font-medium rounded-md text-[var(--on-accent)] bg-[var(--accent-solid)] hover:opacity-90 transition shadow-sm"
           >
             Done
           </button>
         </div>
-      </div>
-    </>,
-    document.body
+    </GlassPopover>
   );
 }
 

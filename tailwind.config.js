@@ -8,8 +8,9 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-inter)', 'Inter', 'Geist', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        mono: ['var(--font-inter)', 'Inter', 'monospace'],
+        sans: ['Geist', 'var(--font-inter)', 'Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        serif: ['Instrument Serif', 'Newsreader', 'Georgia', 'serif'],
+        mono: ['Geist Mono', 'var(--font-inter)', 'Inter', 'monospace'],
       },
       colors: {
         brand: {
